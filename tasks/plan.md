@@ -45,3 +45,20 @@ Riesgos:
 - Maquetaciones distintas entre emisores → la regla de la sección más larga no depende del formato del índice; se verifica con 3 emisores reales.
 - Elemento vacío (`<meta>`, `<br>`) con `display:none` que nunca cierra y se tragaría el resto → los elementos vacíos no abren zona oculta.
 - Encabezado partido en dos líneas ("Item 7." / "Management's…") → el patrón se evalúa sobre la línea y la siguiente.
+
+# Plan: analyst
+
+Spec: `SPEC-analyst.md`. Un archivo (`analyst.py`) + un test (`tests/test_analyst.py`). Sin dependencias nuevas.
+
+Orden (cada paso: test rojo → código → verde):
+1. `prune_mdna` (pura) y medición sobre los MD&A reales en caché (AAPL, MSFT).
+2. `quote_found` (pura): normalización y reglas de rechazo.
+3. `build_request` + `_post` (cabeceras, reintentos 429/529/5xx, 401 sin reintento).
+4. `parse_response` + `summarize_mdna` (stop reasons, estructura, verificación, límite por categoría).
+5. `render` (≤ 10 líneas, alternancia de categorías).
+6. CLI + verificación real con un filing (AAPL 10-Q actual vs anterior) → commit.
+
+Riesgos:
+- La regla de repetición puede borrar subtítulos legítimos repetidos (p. ej. nombres de segmento) → se mide sobre los textos reales antes de fijar el umbral.
+- Coste de la verificación real (~$0,10 por análisis) → una sola llamada real.
+- Respuesta con bloques `thinking`/`fallback` antes del texto → se toma el primer bloque `text`.

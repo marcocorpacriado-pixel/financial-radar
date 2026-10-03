@@ -65,3 +65,25 @@
 - [x] Task 5: CLI + verificación real + commit
   - Acceptance: AAPL 10-Q/10-K, MSFT y NVDA extraen el MD&A del cuerpo; la segunda ejecución hace 1 petición por ticker.
   - Verify: `.venv\Scripts\python -m sec_mdna AAPL 10-Q`
+
+## analyst
+
+- [x] Task 1: `prune_mdna` + medición real
+  - Acceptance: reglas de la spec; ninguna línea con `$` perdida; % de reducción en MSFT/AAPL.
+  - Verify: `.venv\Scripts\python -m unittest tests.test_analyst -v`
+  - Files: `analyst.py`, `tests/test_analyst.py`
+- [x] Task 2: `quote_found`
+  - Acceptance: tolera tipografía/espacios/mayúsculas; rechaza inventadas, parafraseadas, < 20 caracteres, fuente sin texto.
+  - Verify: igual que Task 1
+- [x] Task 3: petición y reintentos
+  - Acceptance: cabeceras y cuerpo de la spec; 429/529 con `retry-after`; 401 sin reintento ni clave en el error.
+  - Verify: igual que Task 1
+- [x] Task 4: `parse_response` + `summarize_mdna`
+  - Acceptance: refusal/max_tokens/JSON inválido; sólo citas verificadas; máx. 3 por categoría; tokens de `usage`.
+  - Verify: igual que Task 1
+- [x] Task 5: `render`
+  - Acceptance: ≤ 10 líneas, alternancia, línea de descartadas, mensaje sin cambios.
+  - Verify: igual que Task 1
+- [x] Task 6: CLI + verificación real + commit
+  - Acceptance: AAPL 10-Q: JSON válido, ≤ 10 líneas, ≤ 20 % citas rechazadas, < $0,15.
+  - Verify: `.venv\Scripts\python -m analyst cache/sec/AAPL_10-Q_2026-06-27.txt cache/sec/AAPL_10-Q_2026-03-28.txt`
