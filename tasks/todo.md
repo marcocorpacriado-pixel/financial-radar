@@ -87,3 +87,14 @@
 - [x] Task 6: CLI + verificación real + commit
   - Acceptance: AAPL 10-Q: JSON válido, ≤ 10 líneas, ≤ 20 % citas rechazadas, < $0,15.
   - Verify: `.venv\Scripts\python -m analyst cache/sec/AAPL_10-Q_2026-06-27.txt cache/sec/AAPL_10-Q_2026-03-28.txt`
+
+## radar
+
+- [x] Task 1: `quant` balance (net debt/EBITDA + caja neta, D/E, cobertura, ROIC, ROE, liquidez)
+  - Verify: `.venv\Scripts\python -m unittest tests.test_quant -v`
+- [x] Task 2: `analyst` con métricas y reglas de prompt
+  - Verify: `.venv\Scripts\python -m unittest tests.test_analyst -v`
+- [x] Task 3: `radar` (cartera, estado, periodicidad, formato, flujo, CLI)
+  - Verify: `.venv\Scripts\python -m unittest tests.test_radar -v`
+- [x] Task 4: verificación real + commit
+  - Verify: `.venv\Scripts\python radar.py --dry-run --force-summary`, `--force-summary`, `--check`

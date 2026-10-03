@@ -62,3 +62,17 @@ Riesgos:
 - La regla de repetición puede borrar subtítulos legítimos repetidos (p. ej. nombres de segmento) → se mide sobre los textos reales antes de fijar el umbral.
 - Coste de la verificación real (~$0,10 por análisis) → una sola llamada real.
 - Respuesta con bloques `thinking`/`fallback` antes del texto → se toma el primer bloque `text`.
+
+# Plan: radar (+ balance en quant, métricas en analyst)
+
+Spec: `SPEC-radar.md` (con cambios en `SPEC-quant.md` y `SPEC-analyst.md`).
+
+Orden (cada paso: test rojo → código → verde):
+1. `quant`: campos de balance y rentabilidad del capital desde los payloads TTM existentes (caso MSTR: ratio negativo con EBITDA negativo ≠ caja neta).
+2. `analyst`: parámetro `metrics`, etiqueta `<financial_metrics>`, reglas de prompt interanual/secuencial y de cruce con el balance.
+3. `radar`: cartera, estado atómico, periodicidad, `format_quant`, flujo de alertas, resumen, CLI.
+4. Verificación real: `--dry-run --force-summary`, `--force-summary`, segundo `--check` → commit.
+
+Riesgos:
+- Coste de la verificación real: análisis LLM iniciales de MSFT/AMZN/MSTR (~$0,1–0,3) dos veces (el dry-run no guarda estado).
+- Alertas perdidas si se marca el accession antes de enviar → el estado sólo se actualiza tras un envío correcto.

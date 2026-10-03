@@ -144,6 +144,20 @@ class RequestTest(ApiTestCase):
         self.assertIn(GUIDANCE, content)
         self.assertNotIn("Litigation Reform Act", content)  # se envía el texto podado
 
+    def test_metrics_block_only_when_given(self):
+        analyst.summarize_mdna(CURRENT, PREVIOUS)
+        self.assertNotIn("<financial_metrics>", json.loads(self.requests[0].data)["messages"][0]["content"])
+        metrics = "MSTR 160.01\n  Deuda neta/EBITDA n/d · D/E 0.15 · Cobertura int. -262.9x · ROIC -13.4%"
+        analyst.summarize_mdna(CURRENT, PREVIOUS, metrics)
+        content = json.loads(self.requests[1].data)["messages"][0]["content"]
+        self.assertIn(f"<financial_metrics>\n{metrics}\n</financial_metrics>", content)
+
+    def test_prompt_rules(self):
+        prompt = analyst.SYSTEM_PROMPT
+        for rule in ("year-over-year", "sequential", "interanual", "secuencial", "<financial_metrics>",
+                     "interest coverage", "debt maturities", "quotes must always come from the MD&A"):
+            self.assertIn(rule, prompt)
+
     def test_without_previous(self):
         analyst.summarize_mdna(CURRENT, None)
         self.assertNotIn("<previous_mdna>", json.loads(self.requests[0].data)["messages"][0]["content"])

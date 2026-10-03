@@ -71,8 +71,11 @@ def ratios_ttm(pe, margin):
 
 
 ROUTES = {
-    ("ratios-ttm", "AAA", None): ratios_ttm(30, 0.25),
-    ("key-metrics-ttm", "AAA", None): [{"evToEBITDATTM": 20, "freeCashFlowYieldTTM": 0.04, "marketCap": 1e12}],
+    ("ratios-ttm", "AAA", None): [{"priceToEarningsRatioTTM": 30, "operatingProfitMarginTTM": 0.25,
+                                   "interestCoverageRatioTTM": 12.5, "debtToEquityRatioTTM": 0.8}],
+    ("key-metrics-ttm", "AAA", None): [{"evToEBITDATTM": 20, "freeCashFlowYieldTTM": 0.04, "marketCap": 1e12,
+                                        "netDebtToEBITDATTM": 1.5, "returnOnInvestedCapitalTTM": 0.18,
+                                        "returnOnEquityTTM": 0.3, "currentRatioTTM": 1.4}],
     ("ratios", "AAA", "annual"): [{"priceToEarningsRatio": v} for v in (20, 25, -5, 24, None)],
     ("key-metrics", "AAA", "annual"): [{"evToEBITDA": v} for v in (25, 25, 30, 0, 20)],
     ("income-statement", "AAA", "quarter"): [
@@ -170,6 +173,44 @@ class AnalyzeTest(FMPTestCase):
         quant.analyze("AAA", ["BBB", "CCC", "FFF"])
         self.assertEqual(len(self.fmp.calls), n)
         self.assertEqual(self.fmp.calls.count(("ratios-ttm", "BBB", None)), 1)
+
+
+class BalanceTest(FMPTestCase):
+    def set_ttm(self, ratios=None, metrics=None):
+        for key, extra in ((("ratios-ttm", "AAA", None), ratios), (("key-metrics-ttm", "AAA", None), metrics)):
+            if extra:
+                self.fmp.routes[key] = [{**self.fmp.routes[key][0], **extra}]
+
+    def test_balance_fields(self):
+        m = quant.analyze("AAA", []).metrics
+        self.assertEqual((m.net_debt_to_ebitda, m.net_cash, m.debt_to_equity), (1.5, False, 0.8))
+        self.assertEqual((m.interest_coverage, m.roic, m.roe, m.current_ratio), (12.5, 0.18, 0.3, 1.4))
+        self.assertLessEqual(quant.calls_made, 6)  # mismos payloads: ninguna llamada extra
+
+    def test_net_cash(self):
+        self.set_ttm(metrics={"netDebtToEBITDATTM": -0.8})  # EBITDA > 0 (EV/EBITDA = 20)
+        m = quant.analyze("AAA", []).metrics
+        self.assertIsNone(m.net_debt_to_ebitda)
+        self.assertTrue(m.net_cash)
+
+    def test_mstr_negative_ebitda_is_not_net_cash(self):
+        # Valores reales de MSTR (2026-10-03): ratio negativo porque el EBITDA es negativo, no por caja neta.
+        self.set_ttm(ratios={"priceToEarningsRatioTTM": -1.67, "interestCoverageRatioTTM": -262.85, "debtToEquityRatioTTM": 0.149},
+                     metrics={"evToEBITDATTM": -2.66, "netDebtToEBITDATTM": -0.232,
+                              "returnOnInvestedCapitalTTM": -0.134, "returnOnEquityTTM": -0.608})
+        m = quant.analyze("AAA", []).metrics
+        self.assertIsNone(m.net_debt_to_ebitda)
+        self.assertFalse(m.net_cash)
+        self.assertIsNone(m.pe_ttm)
+        self.assertEqual(m.debt_to_equity, 0.149)
+        self.assertEqual((m.interest_coverage, m.roic, m.roe), (-262.85, -0.134, -0.608))  # el negativo es la señal
+
+    def test_meaningless_values_are_none(self):
+        self.set_ttm(ratios={"debtToEquityRatioTTM": -2.0, "interestCoverageRatioTTM": None},
+                     metrics={"currentRatioTTM": 0, "returnOnEquityTTM": "n/a", "netDebtToEBITDATTM": None})
+        m = quant.analyze("AAA", []).metrics
+        self.assertEqual((m.debt_to_equity, m.interest_coverage, m.current_ratio, m.roe), (None, None, None, None))
+        self.assertEqual((m.net_debt_to_ebitda, m.net_cash), (None, False))
 
 
 class FallbackTest(FMPTestCase):

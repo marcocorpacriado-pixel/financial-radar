@@ -30,6 +30,13 @@ class Metrics:
     fcf_yield: float | None
     volume: float | None
     volume_avg_30d: float | None
+    net_debt_to_ebitda: float | None
+    net_cash: bool
+    debt_to_equity: float | None
+    interest_coverage: float | None
+    roic: float | None
+    roe: float | None
+    current_ratio: float | None
 
 
 @dataclass(frozen=True)
@@ -167,6 +174,10 @@ def analyze(symbol: str, peers: list[str] | None = None) -> Report:
     margin_ttm = num(ttm.get("operatingProfitMarginTTM"))
     fcf_yield, market_cap = num(km.get("freeCashFlowYieldTTM")), positive(km.get("marketCap"))
     volume, avg30 = (volumes[-1] if volumes else None), avg_volume(volumes)
+    # Con EBITDA <= 0 el ratio deuda neta/EBITDA no significa nada y su signo negativo NO es caja neta (MSTR).
+    raw_ev_ebitda, net_debt_ratio = num(km.get("evToEBITDATTM")), num(km.get("netDebtToEBITDATTM"))
+    ebitda_positive = raw_ev_ebitda is not None and raw_ev_ebitda > 0
+    net_cash = ebitda_positive and net_debt_ratio is not None and net_debt_ratio < 0
 
     if peers is None:
         peers = [r.get("symbol") for r in _rows(fetch("stock-peers", symbol=symbol))]
@@ -200,6 +211,13 @@ def analyze(symbol: str, peers: list[str] | None = None) -> Report:
             fcf_yield=fcf_yield,
             volume=volume,
             volume_avg_30d=avg30,
+            net_debt_to_ebitda=net_debt_ratio if ebitda_positive and not net_cash else None,
+            net_cash=net_cash,
+            debt_to_equity=positive(ttm.get("debtToEquityRatioTTM")),
+            interest_coverage=num(ttm.get("interestCoverageRatioTTM")),  # negativo = el EBIT no cubre intereses
+            roic=num(km.get("returnOnInvestedCapitalTTM")),
+            roe=num(km.get("returnOnEquityTTM")),
+            current_ratio=positive(km.get("currentRatioTTM")),
         ),
         pe_hist_median=hist_pe,
         ev_ebitda_hist_median=hist_ev,

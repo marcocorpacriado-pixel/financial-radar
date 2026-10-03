@@ -1,0 +1,32 @@
+# Cartera monitorizada por radar. Spec: SPEC-radar.md
+#
+# Campos por posición:
+#   ticker       obligatorio. Nombre en mensajes y clave en state.json.
+#   ticker_fmp   opcional (por defecto = ticker). Símbolo en Financial Modeling Prep.
+#   ticker_sec   opcional (por defecto = ticker). Símbolo en SEC EDGAR.
+#   peers        opcional (por defecto []). Pares explícitos para quant; [] = sin comparación con pares.
+#   sec_enabled  opcional (por defecto true). false = sólo análisis cuantitativo.
+
+summary_every_days = 12  # resumen periódico consolidado (silent=True)
+
+[[positions]]
+ticker = "MSFT"
+peers = ["GOOGL", "AMZN", "AAPL", "ORCL"]
+
+[[positions]]
+ticker = "AMZN"
+peers = ["MSFT", "WMT", "GOOGL"]
+
+[[positions]]
+ticker = "MSTR"  # Strategy Inc (antes MicroStrategy)
+peers = ["COIN", "PLTR", "MARA"]
+
+[[positions]]
+ticker = "ESEA"
+peers = ["DAC", "GSL", "ZIM"]
+sec_enabled = false  # Foreign Private Issuer: presenta 20-F/6-K, no 10-K/10-Q
+
+[[positions]]
+ticker = "BABA"
+peers = ["JD", "PDD", "BIDU"]
+sec_enabled = false  # Foreign Private Issuer: presenta 20-F/6-K, no 10-K/10-Q

@@ -33,6 +33,14 @@ class Metrics:
     fcf_yield: float | None
     volume: float | None                # última sesión
     volume_avg_30d: float | None        # media de las 30 sesiones ANTERIORES
+    # Balance y rentabilidad del capital (añadido 2026-10-03; mismos payloads TTM, 0 llamadas extra)
+    net_debt_to_ebitda: float | None    # None si EBITDA <= 0 o si hay caja neta
+    net_cash: bool                      # True sólo si el ratio es < 0 Y el EBITDA es > 0
+    debt_to_equity: float | None        # apalancamiento visible aunque el EBITDA sea negativo (MSTR)
+    interest_coverage: float | None     # EBIT / intereses; el negativo se conserva (no cubre los intereses)
+    roic: float | None                  # el negativo se conserva (destruye valor)
+    roe: float | None
+    current_ratio: float | None
 
 @dataclass(frozen=True)
 class Report:
@@ -50,6 +58,18 @@ class Report:
 ```
 
 Unidades: márgenes, crecimientos, yields, primas y divergencias como **fracción** (0.25 = 25 %). `radar` formatea.
+
+### Balance y rentabilidad del capital
+
+| Campo | Fuente (TTM) | Regla |
+|---|---|---|
+| `net_debt_to_ebitda`, `net_cash` | `key-metrics-ttm.netDebtToEBITDATTM`; signo del EBITDA a partir de `evToEBITDATTM` | EBITDA ≤ 0 → `None` y `net_cash=False`: el ratio no significa nada, y su signo negativo **no** es caja neta (MSTR: −0,23 con EBITDA negativo). EBITDA > 0 y ratio < 0 → `None` y `net_cash=True`. |
+| `debt_to_equity` | `ratios-ttm.debtToEquityRatioTTM` | `positive()`: con patrimonio negativo no es interpretable. Mantiene visible el apalancamiento cuando el ratio sobre EBITDA es `None`. |
+| `interest_coverage` | `ratios-ttm.interestCoverageRatioTTM` | `num()`: **el negativo se conserva**, porque significa que el EBIT no cubre los intereses (MSTR: −262,9) y es la señal de riesgo que se busca. |
+| `roic`, `roe` | `key-metrics-ttm.returnOnInvestedCapitalTTM` / `returnOnEquityTTM` | `num()`: el negativo se conserva, porque un ROIC que cae o es negativo es justo lo que el LLM debe cruzar con el MD&A. |
+| `current_ratio` | `key-metrics-ttm.currentRatioTTM` | `positive()` |
+
+"Negativo → None" se aplica sólo donde el negativo no tiene sentido económico (múltiplos, apalancamiento sobre EBITDA negativo, D/E con patrimonio negativo). En cobertura y rentabilidades, el negativo es información.
 
 ## Reglas de cálculo (funciones puras, todas con test)
 
@@ -104,6 +124,13 @@ Base `https://financialmodelingprep.com/stable/`. `/v4/stock_peers` y el resto d
   - Caché: dos `analyze` que comparten peer → una sola llamada a ese `ratios-ttm`.
   - Trimestral con 403 o lista vacía → fallback a FY (margen, crecimiento y `last_period = "FY …"`).
   - Error de FMP en el ticker principal → `RuntimeError` sin la `apikey` en el mensaje.
+  - Balance:
+    - campos completos;
+    - caja neta (ratio < 0 y EBITDA > 0);
+    - caso MSTR: ratio < 0 con EBITDA < 0 → `None` y sin caja neta;
+    - cobertura, ROIC y ROE negativos conservados;
+    - D/E ≤ 0 → `None`;
+    - el número de llamadas no cambia.
   - Falta `FMP_API_KEY` → `RuntimeError` con su nombre.
 
 ## Criterios de éxito
