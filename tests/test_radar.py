@@ -30,7 +30,7 @@ def report(symbol="MSFT", **values):
 
 
 FULL = dict(price=512.3, pe_ttm=34.1, ev_ebitda_ttm=22.0, operating_margin_ttm=0.452, revenue_growth_yoy=0.15,
-            last_period="Q4 2026", fcf_yield=0.021, net_debt_to_ebitda=0.52, debt_to_equity=0.29,
+            last_period="FY2026 Q4", fcf_yield=0.021, net_debt_to_ebitda=0.52, debt_to_equity=0.29,
             interest_coverage=50.88, roic=0.2056, roe=0.3321, current_ratio=1.23, pe_vs_hist=0.12, pe_vs_peers=0.08,
             ev_ebitda_vs_hist=0.05, margin_vs_peers=0.061, volume_divergence=-0.12)
 
@@ -83,7 +83,7 @@ class PortfolioTest(unittest.TestCase):
             "AMZN": (("MSFT", "WMT", "GOOGL"), True),
             "MSTR": (("COIN", "PLTR", "MARA"), True),
             "ESEA": (("DAC", "GSL", "ZIM"), False),
-            "BABA": (("JD", "PDD", "BIDU"), False),
+            "BABA": (("JD", "PDD", "BIDU", "TCEHY"), False),
         })
 
 
@@ -115,24 +115,42 @@ class FormatTest(unittest.TestCase):
     def test_full(self):
         self.assertEqual(radar.format_quant(report(**FULL), "MSFT"), [
             "MSFT 512.30 · volumen -12% vs media 30 sesiones",
-            "P/E 34.1 (hist +12%, pares +8%) · EV/EBITDA 22.0 (hist +5%)",
-            "Margen op. 45.2% (pares +6.1 pp) · Ingresos +15% YoY (Q4 2026) · FCF yield 2.1%",
-            "Deuda neta/EBITDA 0.5x · D/E 0.29 · Cobertura int. 50.9x · ROIC 20.6% · ROE 33.2% · Liquidez 1.23",
+            "Val: P/E 34.1 (hist +12%, pares +8%) · EV/EBITDA 22.0 (hist +5%)",
+            "Op: margen 45.2% (pares +6.1 pp) · ingresos +15% YoY (FY2026 Q4) · FCF yield 2.1%",
+            "Balance: deuda neta/EBITDA 0.5x · D/E 0.29 · cobertura int. 50.9x · ROIC 20.6% · ROE 33.2% · liquidez 1.23",
         ])
 
     def test_missing_values(self):
         self.assertEqual(radar.format_quant(report(), "MSTR"), [
             "MSTR n/d · volumen n/d vs media 30 sesiones",
-            "P/E n/d (hist n/d, pares n/d) · EV/EBITDA n/d (hist n/d)",
-            "Margen op. n/d (pares n/d) · Ingresos n/d · FCF yield n/d",
-            "Deuda neta/EBITDA n/d · D/E n/d · Cobertura int. n/d · ROIC n/d · ROE n/d · Liquidez n/d",
+            "Val: P/E n/d (hist n/d, pares n/d) · EV/EBITDA n/d (hist n/d)",
+            "Op: margen n/d (pares n/d) · ingresos n/d · FCF yield n/d",
+            "Balance: deuda neta/EBITDA n/d · D/E n/d · cobertura int. n/d · ROIC n/d · ROE n/d · liquidez n/d",
         ])
 
     def test_net_cash_negative_coverage_and_fy(self):
         lines = radar.format_quant(report(net_cash=True, interest_coverage=-262.854, roic=-0.134,
-                                          revenue_growth_yoy=-0.05, last_period="FY 2025"), "X")
-        self.assertIn("Ingresos -5% YoY (FY 2025)", lines[2])
-        self.assertTrue(lines[3].startswith("Deuda neta/EBITDA caja neta · D/E n/d · Cobertura int. -262.9x · ROIC -13.4%"))
+                                          revenue_growth_yoy=-0.05, last_period="FY2025"), "X")
+        self.assertIn("ingresos -5% YoY (FY2025)", lines[2])
+        self.assertTrue(lines[3].startswith("Balance: deuda neta/EBITDA caja neta · D/E n/d · cobertura int. -262.9x · ROIC -13.4%"))
+
+    def test_distorted_operating_margin(self):
+        # MSTR real: margen -16.77 (-1677 %) por el mark-to-market del bitcoin.
+        lines = radar.format_quant(report(operating_margin_ttm=-16.767, margin_vs_peers=-16.877, revenue_growth_yoy=0.07,
+                                          last_period="FY2026 Q2", fcf_yield=-0.411), "MSTR")
+        self.assertEqual(lines[2], "Op: ⚠️ margen -1676.7%: métricas operativas distorsionadas (típico del mark-to-market "
+                                   "de activos digitales); sin comparación con pares · ingresos +7% YoY (FY2026 Q2) · FCF yield -41.1%")
+        self.assertIn("pares +500.0 pp", radar.format_quant(report(operating_margin_ttm=5.0, margin_vs_peers=5.0), "X")[2])
+
+    def test_summary_block_html(self):
+        lines = radar.format_quant(report(**FULL), "MSFT") + ["Filing: 10-K 2026-07-29 · Riesgo/Cat.: Costes <altos> & deuda"]
+        self.assertEqual(radar._html_block("MSFT", lines), [
+            "🔹 <b>MSFT</b> 512.30 · volumen -12% vs media 30 sesiones",
+            "• <b>Val:</b> P/E 34.1 (hist +12%, pares +8%) · EV/EBITDA 22.0 (hist +5%)",
+            "• <b>Op:</b> margen 45.2% (pares +6.1 pp) · ingresos +15% YoY (FY2026 Q4) · FCF yield 2.1%",
+            "• <b>Balance:</b> deuda neta/EBITDA 0.5x · D/E 0.29 · cobertura int. 50.9x · ROIC 20.6% · ROE 33.2% · liquidez 1.23",
+            "• <b>Filing:</b> 10-K 2026-07-29 · Riesgo/Cat.: Costes &lt;altos&gt; &amp; deuda",
+        ])
 
 
 # --- Flujo completo con dependencias simuladas ----------------------------
@@ -216,7 +234,8 @@ class AlertTest(RunTestCase):
         self.assertEqual(lines[0], "Nuevo 10-Q · MSFT · periodo 2026-06-30 (presentado 2026-07-29)")
         self.assertIn("Guidance: Eleva la previsión de ingresos de Azure.", lines)
         self.assertEqual(lines[-1], "https://sec.example/Q2.htm")
-        self.assertIn("Cobertura int. 50.9x", self.metrics_seen[0])
+        self.assertIn("Balance: deuda neta/EBITDA 0.5x · D/E 0.29 · cobertura int. 50.9x", self.metrics_seen[0])
+        self.assertNotIn("<b>", self.metrics_seen[0])  # Claude recibe las métricas en texto plano
         state = self.saved()
         self.assertEqual(state["tickers"]["MSFT"]["accessions"]["10-Q"], "Q2")
         self.assertEqual(state["tickers"]["MSFT"]["last_analysis"]["catalyst"], "Lanzamiento de Copilot para empresas.")
@@ -265,9 +284,10 @@ class SummaryTest(RunTestCase):
         self.send.assert_called_once()  # sólo el resumen, ninguna alerta
         text, silent = self.send.call_args.args[0], self.send.call_args.kwargs["silent"]
         self.assertTrue(silent)
-        self.assertTrue(text.startswith("Radar de cartera · 2026-10-03 (cada 12 días)\n\nMSFT 512.30"))
-        self.assertIn("\n  Último filing: 10-Q 2026-07-29 · Riesgo/Cat.: Lanzamiento de Copilot para empresas.", text)
-        self.assertIn("\n\nESEA 512.30", text)
+        self.assertTrue(self.send.call_args.kwargs["html"])
+        self.assertTrue(text.startswith("📊 <b>Radar de cartera</b> · 2026-10-03 (cada 12 días)\n\n🔹 <b>MSFT</b> 512.30"))
+        self.assertIn("\n• <b>Filing:</b> 10-Q 2026-07-29 · Riesgo/Cat.: Lanzamiento de Copilot para empresas.", text)
+        self.assertIn("\n\n🔹 <b>ESEA</b> 512.30", text)
         state = self.saved()
         self.assertEqual(state["tickers"]["MSFT"]["accessions"], {"10-K": "K1", "10-Q": "Q2"})
         self.assertEqual(state["tickers"]["MSFT"]["last_analysis"]["accession"], "Q2")  # el más reciente
@@ -285,8 +305,8 @@ class SummaryTest(RunTestCase):
         state = self.known_state(q="Q2")
         self.assertEqual(self.run_radar(state, positions=(MSFT, ESEA), force_summary=True), 1)
         text = self.send.call_args.args[0]
-        self.assertIn("MSFT 512.30", text)
-        self.assertIn("ESEA: sin datos FMP (FMP ratios-ttm: HTTP 402)", text)
+        self.assertIn("🔹 <b>MSFT</b> 512.30", text)
+        self.assertIn("🔹 <b>ESEA</b>: sin datos FMP (FMP ratios-ttm: HTTP 402)", text)
 
     def test_catalyst_fallback_text(self):
         self.analysis = analysis(catalyst=None)
@@ -313,11 +333,11 @@ class NewsInSummaryTest(RunTestCase):
     def test_news_for_all_positions_with_haiku_picks(self):
         code, text = self.summary()
         self.assertEqual(code, 0)
-        self.assertIn("\n  Noticias: Microsoft renueva Copilot y la acción sube.\n"
-                      "    · CNBC, 25-09: Microsoft gives Copilot a much-needed overhaul, and the stock deservedly soars", text)
+        self.assertIn("\n💡 <b>Noticias:</b> Microsoft renueva Copilot y la acción sube.\n"
+                      "   ◦ CNBC, 25-09: Microsoft gives Copilot a much-needed overhaul, and the stock deservedly soars", text)
         self.assertNotIn("Load Up", text)  # relleno descartado por Haiku
-        self.assertIn("ESEA 512.30", text)
-        self.assertIn("\n  Noticias: sin novedades materiales", text)
+        self.assertIn("🔹 <b>ESEA</b> 512.30", text)
+        self.assertTrue(text.endswith("\n💡 <b>Noticias:</b> sin novedades materiales"))  # cierra el bloque de ESEA
         headlines, model = self.news_calls[0]
         self.assertEqual(model, "claude-haiku-4-5")
         self.assertEqual(headlines["ESEA"], ["Euroseas Stock Price Forecast. Should You Buy ESEA? (StockInvest.us, 25-09)"])
@@ -332,22 +352,28 @@ class NewsInSummaryTest(RunTestCase):
         self.digests = RuntimeError("Anthropic HTTP 529")
         code, text = self.summary()
         self.assertEqual(code, 0)
-        self.assertIn("\n  Noticias (sin síntesis):\n    · Yahoo Finance, 25-09: Why It's Time to Load Up on Microsoft Stock", text)
+        self.assertIn("\n💡 <b>Noticias</b> (sin síntesis):\n   ◦ Yahoo Finance, 25-09: Why It's Time to Load Up on Microsoft Stock", text)
 
     def test_feed_failure_isolated(self):
         self.news["ESEA"] = RuntimeError("Google News ESEA: HTTP 503")
         code, text = self.summary()
         self.assertEqual(code, 0)
-        self.assertIn("ESEA 512.30", text)
-        self.assertIn("\n  Noticias: no disponibles", text)
+        self.assertIn("🔹 <b>ESEA</b> 512.30", text)
+        self.assertIn("\n💡 <b>Noticias:</b> no disponibles", text)
         self.assertNotIn("ESEA", self.news_calls[0][0])
 
     def test_long_headline_cut(self):
         self.news["MSFT"] = [headline("x" * 300)]
         self.digests = {"MSFT": analyst.NewsDigest("Algo.", (0,))}
         _, text = self.summary()
-        line = next(l for l in text.split("\n") if l.startswith("    · CNBC"))
-        self.assertLessEqual(len(line), len("    · CNBC, 25-09: ") + 120)
+        line = next(l for l in text.split("\n") if l.startswith("   ◦ CNBC"))
+        self.assertLessEqual(len(line), len("   ◦ CNBC, 25-09: ") + 120)
+
+    def test_dynamic_text_is_html_escaped(self):
+        self.news["MSFT"] = [headline("AT&T <deal> with Microsoft")]
+        self.digests = {"MSFT": analyst.NewsDigest("Acuerdo <AT&T>.", (0,))}
+        _, text = self.summary()
+        self.assertIn("💡 <b>Noticias:</b> Acuerdo &lt;AT&amp;T&gt;.\n   ◦ CNBC, 25-09: AT&amp;T &lt;deal&gt; with Microsoft", text)
 
 
 class MainTest(unittest.TestCase):

@@ -24,12 +24,18 @@ def split_message(text: str, limit: int = LIMIT) -> list[str]:
     return parts
 
 
-def send(text: str, *, silent: bool = False) -> None:
-    """Envía text al chat configurado; trocea si supera el límite de Telegram."""
+def send(text: str, *, silent: bool = False, html: bool = False) -> None:
+    """Envía text al chat configurado; trocea si supera el límite de Telegram.
+
+    html=True: parse_mode HTML; quien llama escapa el texto dinámico (html.escape).
+    """
     token, chat_id = _env("TELEGRAM_BOT_TOKEN"), _env("TELEGRAM_CHAT_ID")
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     for part in split_message(text):
-        body = json.dumps({"chat_id": chat_id, "text": part, "disable_notification": silent}).encode()
+        payload = {"chat_id": chat_id, "text": part, "disable_notification": silent}
+        if html:
+            payload["parse_mode"] = "HTML"
+        body = json.dumps(payload).encode()
         req = urllib.request.Request(url, body, {"Content-Type": "application/json"})
         # Nunca se encadena ni se formatea la excepción original: su URL lleva el token.
         try:

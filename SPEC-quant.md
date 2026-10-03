@@ -28,7 +28,7 @@ class Metrics:
     operating_margin_last: float | None # último periodo reportado (trimestre, o FY si hubo fallback)
     operating_margin_ttm: float | None  # base de comparación con peers
     revenue_growth_yoy: float | None    # último periodo vs mismo periodo del año anterior
-    last_period: str | None             # "Q3 2026", o "FY 2025" si hubo fallback
+    last_period: str | None             # "FY2026 Q3" (ejercicio fiscal de la empresa), o "FY2025" si hubo fallback
     fcf_ttm: float | None
     fcf_yield: float | None
     volume: float | None                # última sesión

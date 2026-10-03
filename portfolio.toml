@@ -30,5 +30,5 @@ sec_enabled = false  # Foreign Private Issuer: presenta 20-F/6-K, no 10-K/10-Q
 
 [[positions]]
 ticker = "BABA"
-peers = ["JD", "PDD", "BIDU"]
+peers = ["JD", "PDD", "BIDU", "TCEHY"]  # BIDU con P/E negativo: TCEHY asegura 3 P/E válidos
 sec_enabled = false  # Foreign Private Issuer: presenta 20-F/6-K, no 10-K/10-Q

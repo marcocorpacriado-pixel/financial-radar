@@ -109,3 +109,11 @@
   - Verify: `.venv\Scripts\python radar.py --dry-run --force-summary`
 - [x] Task 4: tarea programada `financial-radar` (L-V 23:30, pythonw) + ejecución de prueba
   - Verify: `schtasks /Query /TN financial-radar /V /FO LIST`, `radar.log`
+
+## refinamientos (2026-10-03)
+
+- [x] BABA con TCEHY como cuarto par (BIDU tiene P/E negativo)
+- [x] Etiqueta de periodo fiscal `FY2026 Q4` / `FY2025` en quant
+- [x] Margen operativo distorsionado (|margen| > 500 %) sin comparación con pares
+- [x] Resumen en HTML de Telegram (negritas, viñetas, Val/Op/Balance/Filing, 🔹 ⚠️ 💡), con escape del texto dinámico
+  - Verify: `.venv\Scripts\python radar.py --dry-run --force-summary`

@@ -10,7 +10,7 @@ Enviar texto al móvil del usuario mediante un bot de Telegram. Es el único can
 ## Interfaz pública
 
 ```python
-def send(text: str, *, silent: bool = False) -> None:
+def send(text: str, *, silent: bool = False, html: bool = False) -> None:
     """Envía text al chat configurado; trocea si supera el límite de Telegram."""
 
 def split_message(text: str, limit: int = 4096) -> list[str]:
@@ -19,7 +19,11 @@ def split_message(text: str, limit: int = 4096) -> list[str]:
 
 - Configuración por entorno: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
 - `silent=True` → `disable_notification` (pensado para el resumen periódico; la alerta prioritaria suena).
-- Texto plano (sin `parse_mode`): el texto del LLM contiene `* _ [ ] ( ) .` que romperían MarkdownV2.
+- Texto plano (sin `parse_mode`) por defecto: el texto del LLM contiene `* _ [ ] ( ) .` que romperían MarkdownV2.
+- `html=True` (añadido el 2026-10-03, para el resumen de `radar`) → `parse_mode: "HTML"`.
+  - Quien llama es responsable de escapar el texto dinámico con `html.escape`; sólo hay que escapar `< > &`.
+  - Se usa HTML en lugar de Markdown porque un `*` o `_` sin escapar en un titular o en una síntesis del LLM hace que Telegram rechace el mensaje entero con un 400.
+  - `split_message` corta por líneas y las etiquetas (`<b>`, `<i>`) nunca cruzan una línea, así que el troceo no rompe el HTML.
 - CLI de prueba: `python -m notify "texto"`. Carga antes `.env` de la carpeta actual.
 
 ```python

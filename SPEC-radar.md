@@ -86,19 +86,27 @@ sec_enabled = true        # opcional, por defecto true
 ### Resumen consolidado
 
 - Si una posición con SEC aún no tiene `last_analysis` (por ejemplo, la primera ejecución), se analiza su filing más reciente con sus métricas y se guarda **sin alerta**. Ocurre una sola vez por ticker (~$0,04–0,12).
-- Formato, texto plano; `notify` lo trocea si supera 4096 caracteres:
+- **Formato (revisado el 2026-10-03): HTML de Telegram** (`notify.send(..., html=True)`). Todo el texto dinámico (cifras, síntesis del LLM, titulares) pasa por `html.escape`; `notify` lo trocea si supera 4096 caracteres. Así se ve en el móvil:
 ```
-Radar de cartera · 2026-10-03 (cada 12 días)
+📊 <b>Radar de cartera</b> · 2026-10-03 (cada 14 días)
 
-MSFT 512.30 · volumen -12% vs media 30 sesiones
-  P/E 34.1 (hist +12%, pares +8%) · EV/EBITDA 22.0 (hist +5%)
-  Margen op. 45.2% (pares +6.1 pp) · Ingresos +15% YoY (Q4 2026) · FCF yield 2.1%
-  Deuda neta/EBITDA 0.5x · D/E 0.29 · Cobertura int. 50.9x · ROIC 20.6% · ROE 33.2% · Liquidez 1.23
-  Último filing: 10-K 2026-07-30 · Riesgo/Cat.: …
-  Noticias: Microsoft renueva Copilot y la acción sube; …
-    · CNBC, 25-09: Microsoft gives Copilot a much-needed overhaul, and the stock deservedly soars
+🔹 <b>MSFT</b> 517.53 · volumen -18% vs media 30 sesiones
+• <b>Val:</b> P/E 28.8 (hist -18%, pares +37%) · EV/EBITDA 19.0 (hist -19%)
+• <b>Op:</b> margen 46.8% (pares +14.0 pp) · ingresos +18% YoY (FY2026 Q4) · FCF yield 1.7%
+• <b>Balance:</b> deuda neta/EBITDA 0.5x · D/E 0.29 · cobertura int. 50.9x · ROIC 20.6% · ROE 33.2% · liquidez 1.23
+• <b>Filing:</b> 10-K 2026-07-29 · Riesgo/Cat.: …   (sin ⚠️: a menudo es un catalizador positivo)
+💡 <b>Noticias:</b> Microsoft lanzó Copilot rediseñado…
+   ◦ CNBC, 25-09: Microsoft gives Copilot a much-needed overhaul, and the stock deservedly soars
 ```
-- Valor ausente → `n/d`. Caja neta → `Deuda neta/EBITDA caja neta`. El precio va sin símbolo de divisa.
+- `format_quant` devuelve las mismas líneas **en texto plano**, con las etiquetas `Val:`, `Op:` y `Balance:`. Ese texto es el que recibe `analyst` como `<financial_metrics>`; las negritas y los emojis se añaden sólo al componer el mensaje.
+- **El bloque de noticias cierra cada posición**, también las que tienen `sec_enabled = false` (ESEA, BABA), que no tienen línea de filing.
+- **Métricas operativas distorsionadas:** si `|margen operativo TTM| > 500 %`, la línea `Op:` muestra `⚠️ margen -1676.7%: métricas operativas distorsionadas (típico del mark-to-market de activos digitales); sin comparación con pares`.
+  - Se omite la diferencia frente a pares, porque no significa nada en ese caso.
+  - Crecimiento y FCF yield se mantienen.
+  - El umbral es genérico (`DISTORTED_MARGIN = 5.0`), no exclusivo de MSTR.
+- **Etiqueta de periodo:** `FY2026 Q4` (trimestre del **ejercicio fiscal** de la empresa: MSFT cierra en junio y BABA en marzo) o `FY2025` si hubo fallback anual.
+- **Alertas de filings** siguen en texto plano: su contenido es el render de `analyst`.
+- Valor ausente → `n/d`. Caja neta → `deuda neta/EBITDA caja neta`. El precio va sin símbolo de divisa.
 - Si `quant` falla en una posición → `TICKER: sin datos FMP (<error>)` y el resto sigue (salida 1).
 - Coste: ~45 llamadas FMP por resumen (los pares compartidos se piden una vez), dentro del límite de 250/día.
 - **Noticias (añadido el 2026-10-03, `SPEC-news.md`):**
@@ -205,6 +213,6 @@ REPLY y otras bolsas no cubiertas por el plan gratuito de FMP, análisis de 20-F
 1. Noticias RSS: módulo `news` independiente (`SPEC-news.md`), integrado en el resumen el 2026-10-03.
 2. REPLY eliminada de la cartera.
 3. MSTR con pares `["COIN", "PLTR", "MARA"]`, que alcanzan `MIN_PEERS = 3`.
-4. BABA con pares `["JD", "PDD", "BIDU"]`; ESEA y BABA con `sec_enabled = false`.
+4. BABA con pares `["JD", "PDD", "BIDU", "TCEHY"]`: TCEHY está cubierto por el plan gratuito, y BIDU tiene P/E negativo (−41,3), así que sin TCEHY sólo quedaban 2 P/E válidos. ESEA y BABA con `sec_enabled = false`.
 5. Programación de lunes a viernes a las 23:30 con `pythonw.exe` (sustituye a "no ejecutar `schtasks` por ahora").
 6. La frecuencia del resumen es la clave existente `summary_every_days = 14`. No se crea una clave `frequency_days`: harían lo mismo.

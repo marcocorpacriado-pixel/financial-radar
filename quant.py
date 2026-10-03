@@ -150,8 +150,9 @@ def _last_period(symbol: str) -> tuple[float | None, float | None, str | None]:
     revenue, op_income = positive(rows[0].get("revenue")), num(rows[0].get("operatingIncome"))
     margin = op_income / revenue if revenue and op_income is not None else None
     growth = yoy(revenue, num(rows[lag].get("revenue"))) if len(rows) > lag else None
-    period = rows[0].get("period")
-    label = f"{period} {rows[0].get('fiscalYear')}" if period else None
+    # Ejercicio fiscal de la empresa (MSFT cierra en junio, BABA en marzo): "FY2026 Q4" o "FY2025".
+    period, fiscal_year = rows[0].get("period"), rows[0].get("fiscalYear")
+    label = (f"FY{fiscal_year}" if period == "FY" else f"FY{fiscal_year} {period}") if period and fiscal_year else period
     return margin, growth, label
 
 

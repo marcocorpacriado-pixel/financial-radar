@@ -53,6 +53,12 @@ class SendTest(unittest.TestCase):
         self.assertEqual(json.loads(req.data), {"chat_id": "42", "text": "hola", "disable_notification": True})
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 10)
 
+    def test_html_parse_mode_only_when_asked(self, urlopen):
+        notify.send("<b>MSFT</b> 517.53", html=True)
+        self.assertEqual(json.loads(urlopen.call_args.args[0].data)["parse_mode"], "HTML")
+        notify.send("texto plano")
+        self.assertNotIn("parse_mode", json.loads(urlopen.call_args.args[0].data))
+
     def test_not_silent_by_default(self, urlopen):
         notify.send("hola")
         self.assertIs(json.loads(urlopen.call_args.args[0].data)["disable_notification"], False)

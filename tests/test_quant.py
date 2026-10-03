@@ -134,7 +134,7 @@ class AnalyzeTest(FMPTestCase):
         self.assertEqual((m.price, m.pe_ttm, m.ev_ebitda_ttm, m.operating_margin_ttm), (50.0, 30.0, 20.0, 0.25))
         self.assertAlmostEqual(m.operating_margin_last, 0.25)          # 30 / 120
         self.assertAlmostEqual(m.revenue_growth_yoy, 0.2)              # 120 / 100 - 1 (Q3 vs Q3)
-        self.assertEqual(m.last_period, "Q3 2026")
+        self.assertEqual(m.last_period, "FY2026 Q3")
         self.assertAlmostEqual(m.fcf_yield, 0.04)
         self.assertAlmostEqual(m.fcf_ttm, 4e10)
         self.assertEqual((m.volume, m.volume_avg_30d), (250.0, 100.0))
@@ -218,7 +218,7 @@ class FallbackTest(FMPTestCase):
         m = quant.analyze("AAA", []).metrics
         self.assertAlmostEqual(m.operating_margin_last, 0.2)   # 100 / 500
         self.assertAlmostEqual(m.revenue_growth_yoy, 0.25)     # 500 / 400 - 1
-        self.assertEqual(m.last_period, "FY 2025")
+        self.assertEqual(m.last_period, "FY2025")
 
     def test_quarter_403_falls_back_to_fy(self):
         self.fmp.routes[("income-statement", "AAA", "quarter")] = http_error(403)

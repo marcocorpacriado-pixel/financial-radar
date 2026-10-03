@@ -1,6 +1,7 @@
 """Orquestador: alertas de 10-K/10-Q nuevos y resumen periódico de la cartera. Spec: SPEC-radar.md."""
 import argparse
 import hashlib
+import html
 import json
 import os
 import sys
@@ -20,6 +21,8 @@ PORTFOLIO = Path("portfolio.toml")
 STATE = Path("state.json")
 FORMS = ("10-K", "10-Q")
 SENT_TTL = timedelta(days=180)
+DISTORTED_MARGIN = 5.0  # |margen operativo| > 500 %: típico del mark-to-market de activos digitales (MSTR)
+_LABELS = ("Val", "Op", "Balance", "Filing")
 _POSITION_KEYS = {"ticker", "ticker_fmp", "ticker_sec", "peers", "sec_enabled"}
 
 
@@ -126,15 +129,33 @@ def format_quant(report: quant.Report, ticker: str) -> list[str]:
     m, r = report.metrics, report
     growth = "n/d" if m.revenue_growth_yoy is None else f"{_delta(m.revenue_growth_yoy)} YoY ({m.last_period})"
     leverage = "caja neta" if m.net_cash else _n(m.net_debt_to_ebitda, suffix="x")
+    if m.operating_margin_ttm is not None and abs(m.operating_margin_ttm) > DISTORTED_MARGIN:
+        margin = (f"⚠️ margen {_pct(m.operating_margin_ttm)}: métricas operativas distorsionadas "
+                  "(típico del mark-to-market de activos digitales); sin comparación con pares")
+    else:
+        margin = f"margen {_pct(m.operating_margin_ttm)} (pares {_pp(r.margin_vs_peers)})"
     return [
         f"{ticker} {_n(m.price, 2)} · volumen {_delta(r.volume_divergence)} vs media 30 sesiones",
-        f"P/E {_n(m.pe_ttm)} (hist {_delta(r.pe_vs_hist)}, pares {_delta(r.pe_vs_peers)}) · "
+        f"Val: P/E {_n(m.pe_ttm)} (hist {_delta(r.pe_vs_hist)}, pares {_delta(r.pe_vs_peers)}) · "
         f"EV/EBITDA {_n(m.ev_ebitda_ttm)} (hist {_delta(r.ev_ebitda_vs_hist)})",
-        f"Margen op. {_pct(m.operating_margin_ttm)} (pares {_pp(r.margin_vs_peers)}) · Ingresos {growth} · "
-        f"FCF yield {_pct(m.fcf_yield)}",
-        f"Deuda neta/EBITDA {leverage} · D/E {_n(m.debt_to_equity, 2)} · Cobertura int. {_n(m.interest_coverage, suffix='x')} · "
-        f"ROIC {_pct(m.roic)} · ROE {_pct(m.roe)} · Liquidez {_n(m.current_ratio, 2)}",
+        f"Op: {margin} · ingresos {growth} · FCF yield {_pct(m.fcf_yield)}",
+        f"Balance: deuda neta/EBITDA {leverage} · D/E {_n(m.debt_to_equity, 2)} · "
+        f"cobertura int. {_n(m.interest_coverage, suffix='x')} · ROIC {_pct(m.roic)} · ROE {_pct(m.roe)} · "
+        f"liquidez {_n(m.current_ratio, 2)}",
     ]
+
+
+def _esc(s: str) -> str:
+    return html.escape(s, quote=False)
+
+
+def _html_block(ticker: str, lines: list[str]) -> list[str]:
+    """Líneas planas de una posición → HTML de Telegram: ticker en negrita y etiquetas como viñetas."""
+    out = [f"🔹 <b>{_esc(ticker)}</b>{_esc(lines[0].removeprefix(ticker))}"]
+    for line in lines[1:]:
+        label, sep, body = line.partition(": ")
+        out.append(f"• <b>{label}:</b> {_esc(body)}" if sep and label in _LABELS else f"• {_esc(line)}")
+    return out
 
 
 def _header(pos: Position, f: sec_mdna.Filing) -> str:
@@ -148,17 +169,18 @@ def _candidate(h: news.Headline) -> str:
 
 def _headline_line(h: news.Headline) -> str:
     title = h.title if len(h.title) <= 120 else h.title[:119].rstrip() + "…"
-    return f"  · {h.source}, {h.published:%d-%m}: {title}"
+    return f"   ◦ {_esc(h.source)}, {h.published:%d-%m}: {_esc(title)}"
 
 
 def _news_lines(headlines: list[news.Headline] | None, digest: analyst.NewsDigest | None, synthesized: bool) -> list[str]:
+    """Bloque HTML de noticias; cierra cada posición (también las que no tienen filings SEC)."""
     if headlines is None:
-        return ["Noticias: no disponibles"]
+        return ["💡 <b>Noticias:</b> no disponibles"]
     if not synthesized and headlines:  # Haiku falló: los primeros del feed, sin filtrar
-        return ["Noticias (sin síntesis):"] + [_headline_line(h) for h in headlines[:3]]
+        return ["💡 <b>Noticias</b> (sin síntesis):"] + [_headline_line(h) for h in headlines[:3]]
     if digest is None:
-        return ["Noticias: sin novedades materiales"]
-    return [f"Noticias: {digest.summary}"] + [_headline_line(headlines[i]) for i in digest.picks]
+        return ["💡 <b>Noticias:</b> sin novedades materiales"]
+    return [f"💡 <b>Noticias:</b> {_esc(digest.summary)}"] + [_headline_line(headlines[i]) for i in digest.picks]
 
 
 # --- Ejecución --------------------------------------------------------------
@@ -177,15 +199,15 @@ def run(positions: list[Position], days: int, state: dict, now: datetime, *,
         if not dry_run:
             save_state(state, state_path)
 
-    def deliver(text, silent, dedupe=True):
+    def deliver(text, silent, dedupe=True, as_html=False):
         digest = hashlib.sha256(text.encode()).hexdigest()
         if dedupe and digest in state["sent"]:
             log("Mensaje idéntico ya enviado: no se reenvía")
             return
         if dry_run:
-            print(f"--- [dry-run] silent={silent} ---\n{text}\n")
+            print(f"--- [dry-run] silent={silent} html={as_html} ---\n{text}\n")
         else:
-            notify.send(text, silent=silent)
+            notify.send(text, silent=silent, html=as_html)
         state["sent"][digest] = now.isoformat()
 
     def metrics(pos):
@@ -271,7 +293,7 @@ def run(positions: list[Position], days: int, state: dict, now: datetime, *,
                         errors += 1
                         log(f"{pos.ticker}: análisis inicial fallido ({e})")
                 if la := tstate.get("last_analysis"):
-                    lines.append(f"Último filing: {la['form']} {la['filing_date']} · "
+                    lines.append(f"Filing: {la['form']} {la['filing_date']} · "
                                  f"Riesgo/Cat.: {la['catalyst'] or 'sin catalizadores verificados'}")
             try:  # las noticias son un complemento: sus fallos no cambian el código de salida
                 headlines[pos.ticker] = news.fetch_news(pos.ticker, limit=10)
@@ -286,11 +308,11 @@ def run(positions: list[Position], days: int, state: dict, now: datetime, *,
         except Exception as e:
             digests, synthesized = {}, False
             log(f"Síntesis de noticias no disponible ({e})")
-        text = f"Radar de cartera · {now:%Y-%m-%d} (cada {days} días)\n\n" + "\n\n".join(
-            "\n  ".join(lines + _news_lines(headlines[pos.ticker], digests.get(pos.ticker), synthesized))
+        text = f"📊 <b>Radar de cartera</b> · {now:%Y-%m-%d} (cada {days} días)\n\n" + "\n\n".join(
+            "\n".join(_html_block(pos.ticker, lines) + _news_lines(headlines[pos.ticker], digests.get(pos.ticker), synthesized))
             for pos, lines in blocks)
         try:
-            deliver(text, silent=True, dedupe=not force_summary)
+            deliver(text, silent=True, dedupe=not force_summary, as_html=True)
             state["last_summary"] = now.isoformat()
         except Exception as e:
             errors += 1
