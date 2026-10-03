@@ -5,7 +5,7 @@ Estado: **APROBADO** (2026-10-03). Índice de specs: este archivo.
 | Module id | Responsabilidad | Depende de |
 |---|---|---|
 | `notify` | Enviar texto a un chat de Telegram (Bot API `sendMessage`). | — |
-| `quant` | Cliente FMP (plan gratuito): P/E TTM, EV/EBITDA, crecimiento de ingresos YoY, margen operativo, FCF, precio y volumen reciente frente a la media de 30 días. | — |
+| `quant` | Cliente FMP (plan gratuito): P/E TTM, EV/EBITDA, margen operativo, crecimiento de ingresos YoY, FCF y FCF yield, precio y divergencia de volumen frente a la media de 30 sesiones; en contexto frente a su mediana histórica y a la mediana de sus pares. | — |
 | `sec-mdna` | EDGAR: ticker→CIK, detectar el último 10-K/10-Q (fecha + hash), extraer Item 7 (10-K) / Item 2 (10-Q) como texto plano. | — |
 | `analyst` | Síntesis con LLM: recibe el texto del MD&A (actual y anterior) y devuelve un resumen ejecutivo denso (cambios de guidance, presión de costes, riesgos, catalizadores). Una llamada HTTP directa a la API, sin frameworks. | — |
 | `radar` | Orquestador CLI: lee `portfolio.toml`, compara con `state.json` (timestamp + hash del último filing por ticker), dispara alerta prioritaria inmediata ante un 10-K/10-Q nuevo y el resumen periódico (cada 7–15 días), y lo envía con `notify`. | notify, quant, sec-mdna, analyst |
@@ -26,7 +26,7 @@ Build order: `notify` → `quant`, `sec-mdna`, `analyst` (paralelizables) → `r
 
 ## Convenciones comunes (aplican a todas las specs)
 
-**Stack:** Python 3.14 (`.venv`), sólo biblioteca estándar: `urllib.request`, `json`, `tomllib`, `hashlib`, `html.parser`, `unittest`. Añadir cualquier dependencia de terceros requiere aprobación.
+**Stack:** Python 3.14 (`.venv`), sólo biblioteca estándar: `urllib.request`, `json`, `tomllib`, `hashlib`, `html.parser`, `statistics`, `dataclasses`, `unittest`. Añadir cualquier dependencia de terceros requiere aprobación.
 
 **Comandos** (desde la raíz, PowerShell):
 ```

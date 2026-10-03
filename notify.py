@@ -37,7 +37,8 @@ def send(text: str, *, silent: bool = False) -> None:
                 data = json.load(resp)
         except urllib.error.HTTPError as e:
             try:
-                data = json.load(e)
+                with e:
+                    data = json.load(e)
             except ValueError:
                 data = {"description": f"HTTP {e.code}"}
         except urllib.error.URLError as e:
