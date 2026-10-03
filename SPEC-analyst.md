@@ -30,7 +30,8 @@ class Analysis:
 def prune_mdna(text: str) -> str:
     """Elimina cabeceras/pies repetidos, viñetas sueltas y el párrafo legal de forward-looking statements."""
 
-def summarize_mdna(current: str, previous: str | None, metrics: str | None = None) -> Analysis:
+def summarize_mdna(current: str, previous: str | None, metrics: str | None = None,
+                   model: str = MODEL) -> Analysis:   # model: analysis_model de portfolio.toml
     """Poda ambos textos, llama a Claude y devuelve sólo los hallazgos con cita verificada."""
 
 def render(analysis: Analysis, header: str) -> str:
@@ -148,7 +149,38 @@ Riesgo/Cat.: Nuevo litigio antimonopolio de la UE sobre App Store.
 - Última línea, sólo si hay rechazos: el número de citas descartadas.
 - Sin hallazgos: `Sin cambios materiales verificables en el MD&A.`
 
+## 5. Síntesis de noticias (añadido el 2026-10-03, ver `SPEC-news.md`)
+
+```python
+@dataclass(frozen=True)
+class NewsDigest:
+    summary: str                 # español, <= 25 palabras
+    picks: tuple[int, ...]       # índices (0-based) de los titulares del ticker que la respaldan, <= 3
+
+def summarize_news(headlines: dict[str, list[str]], model: str = NEWS_MODEL) -> dict[str, NewsDigest]:
+    """Una llamada para toda la cartera: por ticker, los titulares materiales y su síntesis."""
+```
+- **Modelo** `claude-haiku-4-5` (`summary_model` de `portfolio.toml`).
+- **Petición:** `temperature: 0.0`, que Haiku 4.5 sí admite, y `max_tokens: 2000`. Lleva structured outputs, pero **ni `effort` ni `fallbacks`**: `effort` da error en Haiku 4.5, y la cabecera beta de fallbacks sólo se envía cuando el cuerpo lleva `fallbacks`.
+- **Entrada:** titulares numerados por ticker dentro de `<headlines ticker="MSFT">`. Son datos, no instrucciones.
+- **Prompt:**
+  - elegir sólo titulares con información material (resultados, guidance, contratos, regulación, financiación, M&A, rating), y descartar el relleno SEO y los titulares de otras empresas;
+  - sintetizar únicamente lo que dicen los titulares elegidos;
+  - lista vacía si no hay nada material.
+- **Esquema:** `{"positions": [{"ticker", "summary", "picks": [int]}]}`.
+- **Validación anti-alucinación** (función pura): se descartan las entradas con un ticker que no estaba en la entrada, con `picks` vacío o con índices fuera de rango; los índices se deduplican y se cortan a 3. La síntesis sólo puede apoyarse en titulares reales y elegidos.
+- **Coste:** unos 50 titulares de unos 20 tokens → ~1,5K tokens de entrada → < $0,01 por resumen.
+- **Precio de referencia:** Haiku 4.5 cuesta $1/$5 por 1M tokens, frente a $2/$10 de Sonnet 5.5, es decir, un 50 % menos por token (no un 90 %). Aquí no sustituye a nada: es un coste nuevo y mínimo.
+
 ## Tests (`tests/test_analyst.py`, sin red)
+
+- **`summarize_news`:**
+  - modelo Haiku, `temperature 0`;
+  - sin `effort`, `fallbacks` ni cabecera beta;
+  - titulares numerados en la entrada;
+  - descarte de ticker desconocido, `picks` vacío o índice fuera de rango;
+  - corte a 3 picks.
+- `summarize_mdna` acepta `model`, y la cabecera beta va sólo cuando hay `fallbacks`.
 
 - **Poda:**
   - números de página;

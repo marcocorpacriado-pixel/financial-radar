@@ -25,7 +25,9 @@ REPLY (`REY.MI`) queda **eliminada**: el plan gratuito de FMP devuelve HTTP 402 
 ## `portfolio.toml`
 
 ```toml
-summary_every_days = 12
+summary_every_days = 14                    # resumen quincenal (antes 12)
+analysis_model = "claude-sonnet-5-5"       # opcional: análisis de 10-K/10-Q (alertas y análisis inicial)
+summary_model = "claude-haiku-4-5"         # opcional: selección y síntesis de noticias del resumen
 
 [[positions]]
 ticker = "MSTR"           # obligatorio: nombre en mensajes y clave en state.json
@@ -93,10 +95,24 @@ MSFT 512.30 · volumen -12% vs media 30 sesiones
   Margen op. 45.2% (pares +6.1 pp) · Ingresos +15% YoY (Q4 2026) · FCF yield 2.1%
   Deuda neta/EBITDA 0.5x · D/E 0.29 · Cobertura int. 50.9x · ROIC 20.6% · ROE 33.2% · Liquidez 1.23
   Último filing: 10-K 2026-07-30 · Riesgo/Cat.: …
+  Noticias: Microsoft renueva Copilot y la acción sube; …
+    · CNBC, 25-09: Microsoft gives Copilot a much-needed overhaul, and the stock deservedly soars
 ```
 - Valor ausente → `n/d`. Caja neta → `Deuda neta/EBITDA caja neta`. El precio va sin símbolo de divisa.
 - Si `quant` falla en una posición → `TICKER: sin datos FMP (<error>)` y el resto sigue (salida 1).
 - Coste: ~45 llamadas FMP por resumen (los pares compartidos se piden una vez), dentro del límite de 250/día.
+- **Noticias (añadido el 2026-10-03, `SPEC-news.md`):**
+  - para **todas** las posiciones, también ESEA y BABA, se ejecuta `news.fetch_news(ticker, limit=10)`;
+  - después, una sola llamada a `analyst.summarize_news(..., model=summary_model)`;
+  - por posición se muestran `Noticias: <síntesis>` y los ≤ 3 titulares elegidos (`· fuente, dd-mm: título`, cortado a 120 caracteres);
+  - si falla Haiku, se muestran los 3 primeros candidatos sin síntesis;
+  - si falla el feed de un ticker, `Noticias: no disponibles`;
+  - si Haiku no elige nada, `Noticias: sin novedades materiales`;
+  - los fallos de noticias **no** cambian el código de salida: son un complemento y Google News puede fallar de forma puntual.
+- Los modelos salen de `portfolio.toml`:
+  - `analysis_model` va a `summarize_mdna` (alertas y análisis inicial);
+  - `summary_model` va a `summarize_news`;
+  - por defecto, `claude-sonnet-5-5` y `claude-haiku-4-5`.
 
 ### Cambios en módulos existentes (tareas de esta spec)
 
@@ -124,10 +140,19 @@ python radar.py [--check] [--force-summary] [--dry-run]
 - `argparse` y `sys` de la stdlib.
 - Al arrancar, `os.chdir` a la carpeta del proyecto (para `.env`, `cache/`, `state.json` y `portfolio.toml`), y después `notify.load_env()`.
 - Código de salida: `0` si todo fue bien; `1` si falló alguna posición o algún envío. Detalle en stderr.
-- **El Programador de tareas no se configura por ahora** (decisión del 2026-10-03). Comando de referencia para cuando se active:
-  ```
-  schtasks /Create /SC DAILY /ST 23:30 /TN "financial-radar" /TR "C:\Users\User\Desktop\financial-radar\.venv\Scripts\python.exe C:\Users\User\Desktop\financial-radar\radar.py --check"
-  ```
+- **Sin consola (`pythonw.exe`):** `sys.stdout` y `sys.stderr` son `None`. En ese caso `main` los redirige en modo *append* a `radar.log`, en la carpeta del proyecto e ignorado por git, para no perder ni los avisos ni las trazas de error.
+
+## Ejecución programada (Windows, configurada el 2026-10-03)
+
+```
+schtasks /Create /F /TN "financial-radar" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 23:30 /TR "C:\Users\User\Desktop\financial-radar\.venv\Scripts\pythonw.exe C:\Users\User\Desktop\financial-radar\radar.py --check"
+ADAR.PY --CHECK"
+```
+- **De lunes a viernes a las 23:30, hora local:** la zona horaria de la máquina es *Romance Standard Time* (Madrid). Es después del cierre de EE. UU. (22:00, o 21:00 en las semanas en que no coinciden los cambios de hora), así que los 10-K/10-Q publicados tras el cierre ya están en EDGAR.
+- **`pythonw.exe`:** el intérprete sin consola, para que no aparezca ninguna ventana.
+- **Script por ruta (`radar.py`) en vez de `-m radar`:** `schtasks` no permite fijar el directorio de trabajo, y con `-m radar` Python buscaría el módulo en `C:\Windows\System32`. `radar.py` hace `os.chdir` a su carpeta.
+- **Ejecución:** con el usuario actual y sólo con la sesión iniciada, así que no hace falta guardar contraseña. Si el PC está apagado o suspendido a esa hora, la ejecución se pierde, pero no se pierden filings: la siguiente compara el último accession con `state.json`.
+- **Comprobación:** `schtasks /Query /TN financial-radar /V /FO LIST` (columna "Last Result" = 0) y `radar.log`.
 
 ## Tests (`tests/test_radar.py`, sin red: `quant`, `sec_mdna`, `analyst` y `notify` parcheados; estado en un directorio temporal)
 
@@ -154,6 +179,13 @@ python radar.py [--check] [--force-summary] [--dry-run]
   - análisis inicial sin alerta cuando falta `last_analysis`;
   - `--dry-run` → ni `send` ni escritura de estado;
   - `--force-summary` → resumen aunque no toque.
+- **Noticias y modelos (2026-10-03):**
+  - `analysis_model`/`summary_model` por defecto, leídos y validados como texto;
+  - el resumen incluye noticias de todas las posiciones (también `sec_enabled = false`);
+  - `summary_model` llega a `summarize_news` y `analysis_model` a `summarize_mdna`;
+  - si falla Haiku, se muestran los 3 primeros titulares;
+  - si falla el feed, "no disponibles" sin cambiar el código de salida;
+  - con `pythonw` (stdout/stderr `None`), la salida va a `radar.log`.
 
 ## Criterios de éxito
 
@@ -161,15 +193,18 @@ python radar.py [--check] [--force-summary] [--dry-run]
 - [x] `python radar.py --dry-run --force-summary` imprime el resumen real de las 5 posiciones sin abortar.
 - [x] `python radar.py --force-summary` envía el resumen a Telegram en silencio y crea `state.json` con las líneas base y los análisis iniciales.
 - [x] Una segunda ejecución de `python radar.py --check` el mismo día no envía nada.
+- [x] Noticias: `python radar.py --dry-run --force-summary` muestra la síntesis y los titulares de las 5 posiciones.
+- [x] Tarea `financial-radar` creada. Una ejecución manual (`schtasks /Run`) termina con "Last Result" = 0, sin ventana y dejando traza en `radar.log`.
 
 ## Fuera de alcance
 
-Noticias RSS (fase posterior independiente: `SPEC-news.md`), REPLY y otras bolsas no cubiertas por el plan gratuito de FMP, análisis de 20-F/6-K, métrica específica para MSTR (mNAV), conversión de divisas, configuración del Programador de tareas, ejecución concurrente y logging a fichero.
+REPLY y otras bolsas no cubiertas por el plan gratuito de FMP, análisis de 20-F/6-K, métrica específica para MSTR (mNAV), conversión de divisas, recuperar ejecuciones perdidas con el PC apagado, ejecución concurrente y rotación de `radar.log`.
 
 ## Decisiones
 
-1. Noticias RSS: fase posterior, como módulo independiente.
+1. Noticias RSS: módulo `news` independiente (`SPEC-news.md`), integrado en el resumen el 2026-10-03.
 2. REPLY eliminada de la cartera.
 3. MSTR con pares `["COIN", "PLTR", "MARA"]`, que alcanzan `MIN_PEERS = 3`.
 4. BABA con pares `["JD", "PDD", "BIDU"]`; ESEA y BABA con `sec_enabled = false`.
-5. No ejecutar `schtasks` por ahora.
+5. Programación de lunes a viernes a las 23:30 con `pythonw.exe` (sustituye a "no ejecutar `schtasks` por ahora").
+6. La frecuencia del resumen es la clave existente `summary_every_days = 14`. No se crea una clave `frequency_days`: harían lo mismo.

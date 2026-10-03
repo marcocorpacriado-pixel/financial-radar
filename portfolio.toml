@@ -7,7 +7,9 @@
 #   peers        opcional (por defecto []). Pares explícitos para quant; [] = sin comparación con pares.
 #   sec_enabled  opcional (por defecto true). false = sólo análisis cuantitativo.
 
-summary_every_days = 12  # resumen periódico consolidado (silent=True)
+summary_every_days = 14                # resumen periódico consolidado (silent=True)
+analysis_model = "claude-sonnet-5-5"   # análisis de 10-K/10-Q (alertas y análisis inicial)
+summary_model = "claude-haiku-4-5"     # selección y síntesis de noticias del resumen
 
 [[positions]]
 ticker = "MSFT"

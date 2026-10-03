@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import analyst
+import news
 import notify
 import quant
 import sec_mdna
@@ -31,17 +32,28 @@ class Position:
     sec_enabled: bool
 
 
+@dataclass(frozen=True)
+class Config:
+    summary_every_days: int
+    analysis_model: str
+    summary_model: str
+    positions: list[Position]
+
+
 # --- Configuración y estado -----------------------------------------------
 
-def load_portfolio(path: Path = PORTFOLIO) -> tuple[int, list[Position]]:
-    """(summary_every_days, posiciones) con validación estricta de portfolio.toml."""
+def load_portfolio(path: Path = PORTFOLIO) -> Config:
+    """Configuración de portfolio.toml con validación estricta."""
     with open(path, "rb") as f:
         data = tomllib.load(f)
-    if unknown := set(data) - {"summary_every_days", "positions"}:
+    if unknown := set(data) - {"summary_every_days", "analysis_model", "summary_model", "positions"}:
         raise ValueError(f"{path}: claves desconocidas {sorted(unknown)}")
-    days = data.get("summary_every_days", 12)
+    days = data.get("summary_every_days", 14)
     if type(days) is not int or days < 1:
         raise ValueError(f"{path}: summary_every_days debe ser un entero >= 1")
+    models = data.get("analysis_model", analyst.MODEL), data.get("summary_model", analyst.NEWS_MODEL)
+    if not all(isinstance(m, str) and m for m in models):
+        raise ValueError(f"{path}: analysis_model y summary_model deben ser nombres de modelo")
     positions = []
     for i, raw in enumerate(data.get("positions", []), 1):
         where = f"{path}, posición {i}"
@@ -61,7 +73,7 @@ def load_portfolio(path: Path = PORTFOLIO) -> tuple[int, list[Position]]:
         positions.append(Position(ticker, fmp, sec, tuple(peers), enabled))
     if not positions:
         raise ValueError(f"{path}: no hay posiciones")
-    return days, positions
+    return Config(days, *models, positions)
 
 
 def load_state(path: Path = STATE) -> dict:
@@ -129,10 +141,31 @@ def _header(pos: Position, f: sec_mdna.Filing) -> str:
     return f"Nuevo {f.form} · {pos.ticker} · periodo {f.report_date} (presentado {f.filing_date})"
 
 
+def _candidate(h: news.Headline) -> str:
+    """Titular tal como lo ve Haiku."""
+    return f"{h.title} ({h.source}, {h.published:%d-%m})"
+
+
+def _headline_line(h: news.Headline) -> str:
+    title = h.title if len(h.title) <= 120 else h.title[:119].rstrip() + "…"
+    return f"  · {h.source}, {h.published:%d-%m}: {title}"
+
+
+def _news_lines(headlines: list[news.Headline] | None, digest: analyst.NewsDigest | None, synthesized: bool) -> list[str]:
+    if headlines is None:
+        return ["Noticias: no disponibles"]
+    if not synthesized and headlines:  # Haiku falló: los primeros del feed, sin filtrar
+        return ["Noticias (sin síntesis):"] + [_headline_line(h) for h in headlines[:3]]
+    if digest is None:
+        return ["Noticias: sin novedades materiales"]
+    return [f"Noticias: {digest.summary}"] + [_headline_line(headlines[i]) for i in digest.picks]
+
+
 # --- Ejecución --------------------------------------------------------------
 
 def run(positions: list[Position], days: int, state: dict, now: datetime, *,
-        force_summary: bool = False, dry_run: bool = False, state_path: Path = STATE) -> int:
+        force_summary: bool = False, dry_run: bool = False, state_path: Path = STATE,
+        analysis_model: str = analyst.MODEL, summary_model: str = analyst.NEWS_MODEL) -> int:
     """Alertas de filings nuevos y, si toca, resumen consolidado. Devuelve 0 o 1 (hubo fallos)."""
     errors = 0
     latest: dict[str, list[sec_mdna.Filing]] = {}  # filings más recientes vistos en esta ejecución
@@ -160,7 +193,7 @@ def run(positions: list[Position], days: int, state: dict, now: datetime, *,
 
     def analyze_filing(pos, filing, metrics_text):
         current, previous = sec_mdna.fetch_mdna(pos.ticker_sec, filing.form)
-        a = analyst.summarize_mdna(current.text, previous.text if previous else None, metrics_text)
+        a = analyst.summarize_mdna(current.text, previous.text if previous else None, metrics_text, model=analysis_model)
         f = current.filing
         rendered = analyst.render(a, _header(pos, f))
         record = {"form": f.form, "accession": f.accession, "filing_date": f.filing_date, "url": f.url,
@@ -219,28 +252,43 @@ def run(positions: list[Position], days: int, state: dict, now: datetime, *,
 
     # 2. Resumen consolidado.
     if force_summary or summary_due(state, now, days):
-        blocks = []
+        blocks: list[tuple[Position, list[str]]] = []
+        headlines: dict[str, list[news.Headline] | None] = {}
         for pos in positions:
             try:
                 lines = metrics(pos)
             except Exception as e:
                 errors += 1
-                blocks.append(f"{pos.ticker}: sin datos FMP ({e})")
-                continue
-            tstate = state["tickers"].setdefault(pos.ticker, {})
-            if pos.sec_enabled and "last_analysis" not in tstate and latest.get(pos.ticker):
-                newest = max(latest[pos.ticker], key=lambda f: f.filing_date)
-                try:  # primer análisis del ticker: se guarda sin alerta
-                    _, tstate["last_analysis"] = analyze_filing(pos, newest, "\n".join(lines))
-                    persist()
-                except Exception as e:
-                    errors += 1
-                    log(f"{pos.ticker}: análisis inicial fallido ({e})")
-            if la := tstate.get("last_analysis"):
-                lines.append(f"Último filing: {la['form']} {la['filing_date']} · "
-                             f"Riesgo/Cat.: {la['catalyst'] or 'sin catalizadores verificados'}")
-            blocks.append("\n  ".join(lines))
-        text = f"Radar de cartera · {now:%Y-%m-%d} (cada {days} días)\n\n" + "\n\n".join(blocks)
+                lines = [f"{pos.ticker}: sin datos FMP ({e})"]
+            else:
+                tstate = state["tickers"].setdefault(pos.ticker, {})
+                if pos.sec_enabled and "last_analysis" not in tstate and latest.get(pos.ticker):
+                    newest = max(latest[pos.ticker], key=lambda f: f.filing_date)
+                    try:  # primer análisis del ticker: se guarda sin alerta
+                        _, tstate["last_analysis"] = analyze_filing(pos, newest, "\n".join(lines))
+                        persist()
+                    except Exception as e:
+                        errors += 1
+                        log(f"{pos.ticker}: análisis inicial fallido ({e})")
+                if la := tstate.get("last_analysis"):
+                    lines.append(f"Último filing: {la['form']} {la['filing_date']} · "
+                                 f"Riesgo/Cat.: {la['catalyst'] or 'sin catalizadores verificados'}")
+            try:  # las noticias son un complemento: sus fallos no cambian el código de salida
+                headlines[pos.ticker] = news.fetch_news(pos.ticker, limit=10)
+            except Exception as e:
+                headlines[pos.ticker] = None
+                log(f"{pos.ticker}: noticias no disponibles ({e})")
+            blocks.append((pos, lines))
+        try:
+            digests = analyst.summarize_news({t: [_candidate(h) for h in hs] for t, hs in headlines.items() if hs},
+                                             model=summary_model)
+            synthesized = True
+        except Exception as e:
+            digests, synthesized = {}, False
+            log(f"Síntesis de noticias no disponible ({e})")
+        text = f"Radar de cartera · {now:%Y-%m-%d} (cada {days} días)\n\n" + "\n\n".join(
+            "\n  ".join(lines + _news_lines(headlines[pos.ticker], digests.get(pos.ticker), synthesized))
+            for pos, lines in blocks)
         try:
             deliver(text, silent=True, dedupe=not force_summary)
             state["last_summary"] = now.isoformat()
@@ -260,13 +308,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="imprime en vez de enviar y no escribe state.json")
     args = parser.parse_args(argv)
     os.chdir(ROOT)  # .env, cache/, state.json y portfolio.toml funcionan desde el Programador de tareas
-    notify.load_env()
+    if sys.stdout is None or sys.stderr is None:  # pythonw.exe (tarea programada): sin consola → radar.log
+        # ponytail: radar.log crece sin rotación (pocas líneas por ejecución); rotar si llega a molestar
+        log_file = open(ROOT / "radar.log", "a", encoding="utf-8")
+        sys.stdout, sys.stderr = sys.stdout or log_file, sys.stderr or log_file
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
-    days, positions = load_portfolio()
-    return run(positions, days, load_state(), datetime.now(timezone.utc),
-               force_summary=args.force_summary, dry_run=args.dry_run)
+    print(f"=== {datetime.now():%Y-%m-%d %H:%M} radar.py {' '.join(sys.argv[1:] if argv is None else argv)}",
+          file=sys.stderr)
+    notify.load_env()
+    cfg = load_portfolio()
+    return run(cfg.positions, cfg.summary_every_days, load_state(), datetime.now(timezone.utc),
+               force_summary=args.force_summary, dry_run=args.dry_run,
+               analysis_model=cfg.analysis_model, summary_model=cfg.summary_model)
 
 
 if __name__ == "__main__":

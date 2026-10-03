@@ -8,12 +8,13 @@ Estado: **APROBADO** (2026-10-03). Índice de specs: este archivo.
 | `quant` | Cliente FMP (plan gratuito): P/E TTM, EV/EBITDA, margen operativo, crecimiento de ingresos YoY, FCF y FCF yield, precio y divergencia de volumen frente a la media de 30 sesiones; en contexto frente a su mediana histórica y a la mediana de sus pares. | — |
 | `sec-mdna` | EDGAR: ticker→CIK, detectar el último 10-K/10-Q (fecha + hash), extraer Item 7 (10-K) / Item 2 (10-Q) como texto plano. | — |
 | `analyst` | Síntesis con LLM: recibe el texto del MD&A (actual y anterior) y devuelve un resumen ejecutivo denso (cambios de guidance, presión de costes, riesgos, catalizadores). Una llamada HTTP directa a la API, sin frameworks. | — |
-| `radar` | Orquestador CLI: lee `portfolio.toml`, compara con `state.json` (timestamp + hash del último filing por ticker), dispara alerta prioritaria inmediata ante un 10-K/10-Q nuevo y el resumen periódico (cada 7–15 días), y lo envía con `notify`. | notify, quant, sec-mdna, analyst |
+| `news` | Titulares de Google News RSS (últimos 14 días) por ticker, filtrados y deduplicados. Añadido el 2026-10-03. | — |
+| `radar` | Orquestador CLI: lee `portfolio.toml`, compara con `state.json` (timestamp + hash del último filing por ticker), dispara alerta prioritaria inmediata ante un 10-K/10-Q nuevo y el resumen periódico (cada 7–15 días), y lo envía con `notify`. | notify, quant, sec-mdna, analyst, news |
 
-Build order: `notify` → `quant`, `sec-mdna`, `analyst` (paralelizables) → `radar`
+Build order: `notify` → `quant`, `sec-mdna`, `analyst`, `news` (paralelizables) → `radar`
 
-- Los cuatro módulos hoja no se importan entre sí; sólo `radar` los conecta. Sin ciclos.
-- Specs: `SPEC-notify.md`, `SPEC-quant.md`, `SPEC-sec-mdna.md`, `SPEC-analyst.md`, `SPEC-radar.md`.
+- Los módulos hoja no se importan entre sí; sólo `radar` los conecta. Sin ciclos.
+- Specs: `SPEC-notify.md`, `SPEC-quant.md`, `SPEC-sec-mdna.md`, `SPEC-analyst.md`, `SPEC-news.md`, `SPEC-radar.md`.
 
 ## Decisiones cerradas
 

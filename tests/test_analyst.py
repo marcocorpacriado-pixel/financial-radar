@@ -252,6 +252,66 @@ class SummarizeTest(ApiTestCase):
         self.assertEqual([f.summary for f in a.guidance_changes], ["s0", "s1", "s2"])
 
 
+class ModelTest(ApiTestCase):
+    def test_summarize_mdna_uses_given_model(self):
+        analyst.summarize_mdna(CURRENT, PREVIOUS, model="claude-opus-5-5")
+        self.assertEqual(json.loads(self.requests[0].data)["model"], "claude-opus-5-5")
+
+
+HEADLINES = {
+    "MSFT": ["Why It's Time to Load Up on Microsoft Stock (Yahoo Finance, 25-09)",
+             "Microsoft gives Copilot a much-needed overhaul, and the stock deservedly soars (CNBC, 25-09)",
+             "Microsoft Rolls Out Refreshed Copilot App as Stock Lags Megacap Peers (TIKR.com, 28-09)"],
+    "ESEA": ["Euroseas Stock Price Forecast. Should You Buy ESEA? (StockInvest.us, 25-09)",
+             "Ship purchases and debt repayment are among Euroseas (ESEA)'s stated uses for potential offering proceeds. (Stock Titan, 24-09)"],
+    "BABA": [],
+}
+
+
+def news_body(positions):
+    return api_body({"positions": positions})
+
+
+class NewsTest(ApiTestCase):
+    def test_request_is_cheap_and_deterministic(self):
+        self.responses = [news_body([])]
+        analyst.summarize_news(HEADLINES)
+        req = self.requests[0]
+        body = json.loads(req.data)
+        self.assertEqual((body["model"], body["temperature"], body["max_tokens"]), ("claude-haiku-4-5", 0.0, 2000))
+        self.assertNotIn("fallbacks", body)
+        self.assertNotIn("effort", body["output_config"])
+        self.assertEqual(body["output_config"]["format"]["type"], "json_schema")
+        self.assertIsNone(req.get_header("Anthropic-beta"))
+        content = body["messages"][0]["content"]
+        self.assertIn('<headlines ticker="MSFT">\n[0] Why It', content)
+        self.assertIn("[1] Ship purchases", content)
+        self.assertNotIn('ticker="BABA"', content)  # sin titulares no se envía
+
+    def test_only_grounded_picks_survive(self):
+        self.responses = [news_body([
+            {"ticker": "MSFT", "summary": "Microsoft renueva Copilot y la acción sube.", "picks": [1, 2, 1]},
+            {"ticker": "ESEA", "summary": "Inventado.", "picks": [7]},          # índice fuera de rango
+            {"ticker": "NVDA", "summary": "No estaba en la entrada.", "picks": [0]},
+            {"ticker": "BABA", "summary": "Sin titulares.", "picks": [0]},
+        ])]
+        out = analyst.summarize_news(HEADLINES)
+        self.assertEqual(out, {"MSFT": analyst.NewsDigest("Microsoft renueva Copilot y la acción sube.", (1, 2))})
+
+    def test_empty_picks_or_summary_dropped_and_max_three(self):
+        many = {"MSFT": [f"h{i}" for i in range(6)]}
+        self.responses = [news_body([{"ticker": "MSFT", "summary": "  ", "picks": [0]}])]
+        self.assertEqual(analyst.summarize_news(many), {})
+        self.responses = [news_body([{"ticker": "MSFT", "summary": "Varias.", "picks": []}])]
+        self.assertEqual(analyst.summarize_news(many), {})
+        self.responses = [news_body([{"ticker": "MSFT", "summary": "Varias.", "picks": [5, 4, 3, 2]}])]
+        self.assertEqual(analyst.summarize_news(many)["MSFT"].picks, (5, 4, 3))
+
+    def test_no_headlines_no_call(self):
+        self.assertEqual(analyst.summarize_news({"BABA": []}), {})
+        self.assertEqual(self.requests, [])
+
+
 # --- Render ---------------------------------------------------------------
 
 def analysis(g=0, p=0, r=0, rejected=0):

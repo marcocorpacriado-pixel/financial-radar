@@ -1,5 +1,7 @@
 import contextlib
 import io
+import os
+import sys
 import tempfile
 import unittest
 from dataclasses import fields
@@ -8,6 +10,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import analyst
+import news
 import quant
 import radar
 import sec_mdna
@@ -52,9 +55,10 @@ class PortfolioTest(unittest.TestCase):
             return radar.load_portfolio(path)
 
     def test_defaults(self):
-        days, positions = self.load('[[positions]]\nticker = "MSFT"\n')
-        self.assertEqual(days, 12)
-        self.assertEqual(positions, [radar.Position("MSFT", "MSFT", "MSFT", (), True)])
+        cfg = self.load('[[positions]]\nticker = "MSFT"\n')
+        self.assertEqual((cfg.summary_every_days, cfg.analysis_model, cfg.summary_model),
+                         (14, "claude-sonnet-5-5", "claude-haiku-4-5"))
+        self.assertEqual(cfg.positions, [radar.Position("MSFT", "MSFT", "MSFT", (), True)])
 
     def test_invalid(self):
         for text in ('[[positions]]\nticker = "MSFT"\nsec_enable = false\n',            # errata
@@ -64,14 +68,17 @@ class PortfolioTest(unittest.TestCase):
                      '[[positions]]\nticker = "A"\nsec_enabled = "no"\n',                # tipo
                      'summary_every_days = 0\n[[positions]]\nticker = "A"\n',
                      'summary_every_days = 12\n',                                        # sin posiciones
-                     'otra = 1\n[[positions]]\nticker = "A"\n'):
+                     'otra = 1\n[[positions]]\nticker = "A"\n',
+                     'summary_model = 5\n[[positions]]\nticker = "A"\n',
+                     'analysis_model = ""\n[[positions]]\nticker = "A"\n'):
             with self.assertRaises(ValueError, msg=text):
                 self.load(text)
 
     def test_real_portfolio(self):
-        days, positions = radar.load_portfolio(radar.ROOT / "portfolio.toml")
-        self.assertEqual(days, 12)
-        self.assertEqual({p.ticker: (p.peers, p.sec_enabled) for p in positions}, {
+        cfg = radar.load_portfolio(radar.ROOT / "portfolio.toml")
+        self.assertEqual((cfg.summary_every_days, cfg.analysis_model, cfg.summary_model),
+                         (14, "claude-sonnet-5-5", "claude-haiku-4-5"))
+        self.assertEqual({p.ticker: (p.peers, p.sec_enabled) for p in cfg.positions}, {
             "MSFT": (("GOOGL", "AMZN", "AAPL", "ORCL"), True),
             "AMZN": (("MSFT", "WMT", "GOOGL"), True),
             "MSTR": (("COIN", "PLTR", "MARA"), True),
@@ -139,13 +146,18 @@ class RunTestCase(unittest.TestCase):
                         ("MSFT", "10-Q"): [filing("Q2")]}
         self.reports = {"MSFT": report("MSFT", **FULL), "ESEA": report("ESEA", **FULL)}
         self.analysis = analysis()
-        self.metrics_seen = []
+        self.metrics_seen, self.models_seen = [], []
+        self.news = {}              # ticker -> lista de Headline o excepción
+        self.digests = {}           # resultado de summarize_news o excepción
+        self.news_calls = []
         self.send = Mock()
         self.sec_filings = Mock(side_effect=lambda t, form: self.filings.get((t, form), []))
         for target, fake in (("quant.analyze", self.fake_quant),
                              ("sec_mdna.filings", self.sec_filings),
                              ("sec_mdna.fetch_mdna", self.fake_fetch),
                              ("analyst.summarize_mdna", self.fake_summarize),
+                             ("analyst.summarize_news", self.fake_summarize_news),
+                             ("news.fetch_news", self.fake_fetch_news),
                              ("notify.send", self.send)):
             p = patch(target, fake)
             p.start()
@@ -161,11 +173,25 @@ class RunTestCase(unittest.TestCase):
         f = self.filings[(ticker, form)][0]
         return sec_mdna.MDNAContext(f, "texto actual", "h1"), sec_mdna.MDNAContext(filing("Q1"), "texto anterior", "h0")
 
-    def fake_summarize(self, current, previous, metrics):
+    def fake_summarize(self, current, previous, metrics, model):
         self.metrics_seen.append(metrics)
+        self.models_seen.append(model)
         if isinstance(self.analysis, Exception):
             raise self.analysis
         return self.analysis
+
+    def fake_fetch_news(self, ticker, limit):
+        self.assertEqual(limit, 10)
+        r = self.news.get(ticker, [])
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    def fake_summarize_news(self, headlines, model):
+        self.news_calls.append((headlines, model))
+        if isinstance(self.digests, Exception):
+            raise self.digests
+        return self.digests
 
     def run_radar(self, state, positions=(MSFT,), **kwargs):
         return radar.run(list(positions), 12, state, NOW, state_path=self.state_path, **kwargs)
@@ -268,14 +294,91 @@ class SummaryTest(RunTestCase):
         self.assertIn("Riesgo/Cat.: sin catalizadores verificados", self.send.call_args.args[0])
 
 
+def headline(title, source="CNBC", day=25):
+    return news.Headline(title, source, datetime(2026, 9, day, 18, 0, tzinfo=timezone.utc), "https://g/" + title)
+
+
+class NewsInSummaryTest(RunTestCase):
+    def setUp(self):
+        super().setUp()
+        self.news = {"MSFT": [headline("Why It's Time to Load Up on Microsoft Stock", "Yahoo Finance"),
+                              headline("Microsoft gives Copilot a much-needed overhaul, and the stock deservedly soars")],
+                     "ESEA": [headline("Euroseas Stock Price Forecast. Should You Buy ESEA?", "StockInvest.us")]}
+        self.digests = {"MSFT": analyst.NewsDigest("Microsoft renueva Copilot y la acción sube.", (1,))}
+
+    def summary(self, **kwargs):
+        code = self.run_radar(self.known_state(q="Q2"), positions=(MSFT, ESEA), force_summary=True, **kwargs)
+        return code, self.send.call_args.args[0]
+
+    def test_news_for_all_positions_with_haiku_picks(self):
+        code, text = self.summary()
+        self.assertEqual(code, 0)
+        self.assertIn("\n  Noticias: Microsoft renueva Copilot y la acción sube.\n"
+                      "    · CNBC, 25-09: Microsoft gives Copilot a much-needed overhaul, and the stock deservedly soars", text)
+        self.assertNotIn("Load Up", text)  # relleno descartado por Haiku
+        self.assertIn("ESEA 512.30", text)
+        self.assertIn("\n  Noticias: sin novedades materiales", text)
+        headlines, model = self.news_calls[0]
+        self.assertEqual(model, "claude-haiku-4-5")
+        self.assertEqual(headlines["ESEA"], ["Euroseas Stock Price Forecast. Should You Buy ESEA? (StockInvest.us, 25-09)"])
+
+    def test_models_come_from_config(self):
+        self.summary(summary_model="claude-x-news")
+        self.assertEqual(self.news_calls[0][1], "claude-x-news")
+        self.run_radar(self.known_state(), analysis_model="claude-x-filings")
+        self.assertEqual(self.models_seen, ["claude-x-filings"])
+
+    def test_haiku_failure_shows_first_headlines(self):
+        self.digests = RuntimeError("Anthropic HTTP 529")
+        code, text = self.summary()
+        self.assertEqual(code, 0)
+        self.assertIn("\n  Noticias (sin síntesis):\n    · Yahoo Finance, 25-09: Why It's Time to Load Up on Microsoft Stock", text)
+
+    def test_feed_failure_isolated(self):
+        self.news["ESEA"] = RuntimeError("Google News ESEA: HTTP 503")
+        code, text = self.summary()
+        self.assertEqual(code, 0)
+        self.assertIn("ESEA 512.30", text)
+        self.assertIn("\n  Noticias: no disponibles", text)
+        self.assertNotIn("ESEA", self.news_calls[0][0])
+
+    def test_long_headline_cut(self):
+        self.news["MSFT"] = [headline("x" * 300)]
+        self.digests = {"MSFT": analyst.NewsDigest("Algo.", (0,))}
+        _, text = self.summary()
+        line = next(l for l in text.split("\n") if l.startswith("    · CNBC"))
+        self.assertLessEqual(len(line), len("    · CNBC, 25-09: ") + 120)
+
+
 class MainTest(unittest.TestCase):
     def test_flags_reach_run(self):
         with patch("radar.run", return_value=0) as run, patch("radar.load_state", return_value={"tickers": {}, "sent": {}}):
             self.assertEqual(radar.main(["--dry-run", "--force-summary"]), 0)
-            self.assertEqual(run.call_args.kwargs, {"force_summary": True, "dry_run": True})
+            self.assertEqual(run.call_args.kwargs, {"force_summary": True, "dry_run": True,
+                                                    "analysis_model": "claude-sonnet-5-5", "summary_model": "claude-haiku-4-5"})
             radar.main([])
-            self.assertEqual(run.call_args.kwargs, {"force_summary": False, "dry_run": False})
+            self.assertEqual((run.call_args.kwargs["force_summary"], run.call_args.kwargs["dry_run"]), (False, False))
             self.assertEqual(len(run.call_args.args[0]), 5)
+            self.assertEqual(run.call_args.args[1], 14)
+
+    def test_pythonw_without_console_logs_to_file(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(os.chdir, os.getcwd())
+        cfg = radar.Config(14, "a", "s", [MSFT])
+
+        def fake_run(*args, **kwargs):
+            print("aviso de prueba", file=sys.stderr)
+            return 0
+
+        with patch("radar.ROOT", Path(tmp.name)), patch("radar.load_portfolio", return_value=cfg), \
+                patch("radar.load_state", return_value={"tickers": {}, "sent": {}}), patch("radar.run", fake_run), \
+                patch("radar.notify.load_env"), patch("sys.stdout", None), patch("sys.stderr", None):
+            self.assertEqual(radar.main(["--check"]), 0)
+            sys.stderr.close()
+        log = (Path(tmp.name) / "radar.log").read_text(encoding="utf-8")
+        self.assertIn("radar.py --check", log)
+        self.assertIn("aviso de prueba", log)
 
 
 if __name__ == "__main__":

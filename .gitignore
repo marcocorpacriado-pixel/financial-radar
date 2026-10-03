@@ -2,3 +2,5 @@ __pycache__/
 state.json
 .env
 cache/
+radar.log
+state.json.tmp

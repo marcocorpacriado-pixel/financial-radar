@@ -98,3 +98,14 @@
   - Verify: `.venv\Scripts\python -m unittest tests.test_radar -v`
 - [x] Task 4: verificación real + commit
   - Verify: `.venv\Scripts\python radar.py --dry-run --force-summary`, `--force-summary`, `--check`
+
+## news + modelos + automatización
+
+- [x] Task 1: `news.py` (parse_feed, dedupe, fetch_news) con TDD
+  - Verify: `.venv\Scripts\python -m unittest tests.test_news -v`; `python -m news MSFT`
+- [x] Task 2: `analyst.summarize_news` (Haiku, temperature 0, picks validados) + parámetro `model`
+  - Verify: `.venv\Scripts\python -m unittest tests.test_analyst -v`
+- [x] Task 3: `radar`: Config con modelos, noticias en el resumen, log con pythonw
+  - Verify: `.venv\Scripts\python radar.py --dry-run --force-summary`
+- [x] Task 4: tarea programada `financial-radar` (L-V 23:30, pythonw) + ejecución de prueba
+  - Verify: `schtasks /Query /TN financial-radar /V /FO LIST`, `radar.log`
