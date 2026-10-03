@@ -117,3 +117,10 @@
 - [x] Margen operativo distorsionado (|margen| > 500 %) sin comparación con pares
 - [x] Resumen en HTML de Telegram (negritas, viñetas, Val/Op/Balance/Filing, 🔹 ⚠️ 💡), con escape del texto dinámico
   - Verify: `.venv\Scripts\python radar.py --dry-run --force-summary`
+
+## Fase A (2026-10-03)
+
+- [x] Verificar cobertura FMP de REY.MI y pares europeos → 402 con la clave actual: Reply queda pendiente (decisión del usuario)
+- [x] Evaluar noticias de FMP → descartado (legacy 403, mismo ruido SEO, press releases de terceros); evidencia en SPEC-news.md
+- [x] Criterio de Haiku endurecido: asignación de capital / shocks operativos-regulatorios / guidance y ratings
+  - Verify: `.venv\Scripts\python radar.py --dry-run --force-summary`

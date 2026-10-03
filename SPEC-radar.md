@@ -211,7 +211,7 @@ REPLY y otras bolsas no cubiertas por el plan gratuito de FMP, análisis de 20-F
 ## Decisiones
 
 1. Noticias RSS: módulo `news` independiente (`SPEC-news.md`), integrado en el resumen el 2026-10-03.
-2. REPLY eliminada de la cartera.
+2. REPLY eliminada de la cartera. *Fase A (2026-10-03)*: se intentó reincorporarla con pares `["CAP.PA", "ALMY.PA", "SOP.PA", "ACN"]`, pero la clave FMP actual sigue devolviendo **402** para REY.MI, CAP.PA, ALMY.PA y SOP.PA (sólo ACN responde). Queda pendiente de una clave con cobertura europea; añadirla ahora haría que cada resumen terminara con código 1. Cuando llegue: `ticker = "REPLY"`, `ticker_fmp = "REY.MI"`, `sec_enabled = false`, y volver a verificar los pares.
 3. MSTR con pares `["COIN", "PLTR", "MARA"]`, que alcanzan `MIN_PEERS = 3`.
 4. BABA con pares `["JD", "PDD", "BIDU", "TCEHY"]`: TCEHY está cubierto por el plan gratuito, y BIDU tiene P/E negativo (−41,3), así que sin TCEHY sólo quedaban 2 P/E válidos. ESEA y BABA con `sec_enabled = false`.
 5. Programación de lunes a viernes a las 23:30 con `pythonw.exe` (sustituye a "no ejecutar `schtasks` por ahora").

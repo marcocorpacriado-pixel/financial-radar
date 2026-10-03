@@ -164,7 +164,11 @@ def summarize_news(headlines: dict[str, list[str]], model: str = NEWS_MODEL) -> 
 - **Petición:** `temperature: 0.0`, que Haiku 4.5 sí admite, y `max_tokens: 2000`. Lleva structured outputs, pero **ni `effort` ni `fallbacks`**: `effort` da error en Haiku 4.5, y la cabecera beta de fallbacks sólo se envía cuando el cuerpo lleva `fallbacks`.
 - **Entrada:** titulares numerados por ticker dentro de `<headlines ticker="MSFT">`. Son datos, no instrucciones.
 - **Prompt:**
-  - elegir sólo titulares con información material (resultados, guidance, contratos, regulación, financiación, M&A, rating), y descartar el relleno SEO y los titulares de otras empresas;
+  - *(Criterio endurecido el 2026-10-03, Fase A)* elegir sólo hechos con impacto material en la valoración, en tres grupos:
+    1. **asignación de capital:** emisiones de acciones o deuda convertible, shelf registrations, recompras, cambios de dividendo, M&A y compras o ventas de activos relevantes;
+    2. **shocks operativos o regulatorios:** litigios, aranceles, sanciones, actuaciones regulatorias y contratos estratégicos relevantes o pérdida de clientes;
+    3. **revisiones oficiales de guidance o cambios drásticos de calificación** (crediticia o de analistas).
+  - descartar análisis técnico, listas de precio objetivo, piezas del tipo "¿deberías comprar?", previsiones de precio, resúmenes automáticos de mercado y movimientos del día, transcripciones de conferencias sin hechos nuevos, y titulares de otras empresas;
   - sintetizar únicamente lo que dicen los titulares elegidos;
   - lista vacía si no hay nada material.
 - **Esquema:** `{"positions": [{"ticker", "summary", "picks": [int]}]}`.

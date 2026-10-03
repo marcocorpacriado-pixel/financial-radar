@@ -307,6 +307,14 @@ class NewsTest(ApiTestCase):
         self.responses = [news_body([{"ticker": "MSFT", "summary": "Varias.", "picks": [5, 4, 3, 2]}])]
         self.assertEqual(analyst.summarize_news(many)["MSFT"].picks, (5, 4, 3))
 
+    def test_prompt_material_criteria(self):
+        prompt = analyst.NEWS_PROMPT
+        for rule in ("Capital allocation", "convertible", "buybacks", "M&A",
+                     "Operating or regulatory shocks", "litigation", "tariffs", "strategic contracts",
+                     "guidance revisions", "rating changes",
+                     "technical analysis", "automated market recaps", "other companies"):
+            self.assertIn(rule, prompt)
+
     def test_no_headlines_no_call(self):
         self.assertEqual(analyst.summarize_news({"BABA": []}), {})
         self.assertEqual(self.requests, [])

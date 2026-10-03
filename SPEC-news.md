@@ -84,6 +84,20 @@ def fetch_news(ticker: str, limit: int = 10, now: datetime | None = None) -> lis
 - [x] Tests en verde (todo el proyecto).
 - [x] `python -m news MSFT` y `python -m news ESEA` imprimen titulares reales deduplicados de los últimos 14 días.
 
+## Evaluado y descartado: noticias de FMP (2026-10-03, Fase A)
+
+Se valoró usar FMP como fuente principal, con Google News como respaldo. Se descartó tras probarlo con la clave real:
+
+| Prueba | Resultado |
+|---|---|
+| `api/v3/stock_news` (URL propuesta) | **403**: endpoint legacy, sólo para suscriptores anteriores a la migración a `stable/` |
+| `stable/news/stock?symbols=MSFT` | 200, pero el mismo relleno SEO que Google ("Is a Microsoft Stock Split Coming…", 247wallst) |
+| `stable/news/press-releases?symbols=MSFT` | 200, pero son **notas de prensa de terceros** que mencionan a Microsoft (IntuigenceAI, Semarchy, Trust3 AI), no de Microsoft |
+| `stable/news/stock?symbols=REY.MI` | 0 resultados |
+| `stable/news/stock?symbols=ESEA` | La más reciente es del 25/08, fuera de la ventana de 14 días |
+
+FMP no mejoraba la calidad y añadía 2 llamadas por ticker. La mejora real está en el **criterio de selección de Haiku** (ver `SPEC-analyst.md` §5), que se endureció con tres grupos de hechos materiales.
+
 ## Fuera de alcance
 
 Otras fuentes (Yahoo, Seeking Alpha), resolver la URL final de la noticia, descargar el cuerpo del artículo, análisis de sentimiento, deduplicación por embeddings e histórico de noticias ya enviadas (el resumen es periódico; repetir un titular de hace 10 días es aceptable).
