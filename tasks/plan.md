@@ -29,3 +29,19 @@ Riesgos:
 - Orden de las series de FMP (más reciente primero) → el volumen se ordena por `date`; el trimestral se indexa 0 vs 4 (verificado).
 - Cuota diaria → caché por ejecución y `calls_made` visible en el CLI.
 - `functools.cache` no cachea excepciones: un peer fallido se reintentaría en otro `analyze` (aceptable).
+
+# Plan: sec-mdna
+
+Spec: `SPEC-sec-mdna.md`. Un archivo (`sec_mdna.py`) + un test (`tests/test_sec_mdna.py`). Sin dependencias nuevas.
+
+Orden (cada paso: test rojo → código → verde):
+1. `html_to_text`: HTMLParser con descarte de ocultos, líneas de bloque, filas de tabla y fusión de `$ ) %`.
+2. `extract_section`: candidatos de encabezado + regla de la sección más larga + marcadores de fin.
+3. HTTP SEC (`_get`: User-Agent, gzip, pausa), CIK con caché y `filings`.
+4. `fetch_mdna` con caché en disco y anterior opcional.
+5. CLI + verificación real (AAPL 10-Q/10-K, MSFT, NVDA) → commit.
+
+Riesgos:
+- Maquetaciones distintas entre emisores → la regla de la sección más larga no depende del formato del índice; se verifica con 3 emisores reales.
+- Elemento vacío (`<meta>`, `<br>`) con `display:none` que nunca cierra y se tragaría el resto → los elementos vacíos no abren zona oculta.
+- Encabezado partido en dos líneas ("Item 7." / "Management's…") → el patrón se evalúa sobre la línea y la siguiente.

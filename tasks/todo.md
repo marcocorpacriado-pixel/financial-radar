@@ -43,3 +43,25 @@
 - [x] Task 5: CLI + verificación real + commit
   - Acceptance: `python -m quant AAPL` sin nulos, ≤ 12 llamadas, valores coherentes con FMP.
   - Verify: `.venv\Scripts\python -m quant AAPL`
+
+## sec-mdna
+
+- [x] Task 1: `html_to_text`
+  - Acceptance: ocultos fuera, bloques como líneas, `<br>` en celda como espacio, filas `a | b`, `$78,678`, `(1,234)`, `12%`.
+  - Verify: `.venv\Scripts\python -m unittest tests.test_sec_mdna -v`
+  - Files: `sec_mdna.py`, `tests/test_sec_mdna.py`
+- [x] Task 2: `extract_section`
+  - Acceptance: índice frente a cuerpo, 7 frente a 7A, Item 2 de la Parte II, marcadores de fin, `MIN_CHARS`.
+  - Verify: igual que Task 1
+  - Files: `sec_mdna.py`, `tests/test_sec_mdna.py`
+- [x] Task 3: HTTP SEC, CIK y `filings`
+  - Acceptance: User-Agent y gzip, mapa en caché con refresco ante ausencia, sin `/A`, más reciente primero.
+  - Verify: igual que Task 1
+  - Files: `sec_mdna.py`, `tests/test_sec_mdna.py`
+- [x] Task 4: `fetch_mdna` + caché en disco
+  - Acceptance: (actual, anterior | None), sha256, segunda llamada sólo `submissions`.
+  - Verify: igual que Task 1
+  - Files: `sec_mdna.py`, `tests/test_sec_mdna.py`
+- [x] Task 5: CLI + verificación real + commit
+  - Acceptance: AAPL 10-Q/10-K, MSFT y NVDA extraen el MD&A del cuerpo; la segunda ejecución hace 1 petición por ticker.
+  - Verify: `.venv\Scripts\python -m sec_mdna AAPL 10-Q`
