@@ -8,6 +8,12 @@
 #   sec_enabled  opcional (por defecto true). false = sólo análisis cuantitativo.
 #   distorted_metrics  opcional (por defecto false). true = margen, ROE y spread se marcan como no representativos.
 #   tax_exempt   opcional (por defecto false). true = tipo impositivo 0 en el coste neto de la deuda.
+#   fmp_enabled  opcional (por defecto true). false = sin FMP: sólo precio y volumen de Yahoo (exige ticker_yahoo).
+#   ticker_yahoo opcional. Símbolo en Yahoo Finance (NXT.MC).
+#   name         opcional. Razón social; ayuda a Haiku a reconocer las noticias de tickers ambiguos.
+#   currency     opcional. Divisa que se muestra junto al precio.
+#   news_query   opcional (por defecto "<ticker> stock"). Búsqueda de Google News.
+#   news_lang    opcional (por defecto "en"). Edición de Google News: "en" o "es".
 
 summary_every_days = 14                # resumen periódico consolidado (silent=True)
 analysis_model = "claude-sonnet-5-5"   # análisis de 10-K/10-Q (alertas y análisis inicial)
@@ -27,12 +33,16 @@ distorted_metrics = true  # tesorería en bitcoin: el mark-to-market domina már
 peers = ["COIN", "PLTR", "MARA"]
 
 [[positions]]
-ticker = "ESEA"
-peers = ["DAC", "GSL", "ZIM"]
-sec_enabled = false  # Foreign Private Issuer: presenta 20-F/6-K, no 10-K/10-Q
-tax_exempt = true    # naviera en régimen de tonelaje: sin escudo fiscal de la deuda
-
-[[positions]]
 ticker = "BABA"
 peers = ["JD", "PDD", "BIDU", "TCEHY"]  # BIDU con P/E negativo: TCEHY asegura 3 P/E válidos
 sec_enabled = false  # Foreign Private Issuer: presenta 20-F/6-K, no 10-K/10-Q
+
+[[positions]]
+ticker = "NXT"
+name = "Nueva Expresion Textil, S.A."
+ticker_yahoo = "NXT.MC"
+currency = "EUR"
+sec_enabled = false  # cotiza en Madrid: no presenta en EDGAR
+fmp_enabled = false  # precio y volumen desde Yahoo Finance; sin fundamentales
+news_query = 'Nextil OR "Nueva Expresion Textil"'
+news_lang = "es"

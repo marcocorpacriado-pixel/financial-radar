@@ -11,6 +11,7 @@ from email.utils import parsedate_to_datetime
 
 USER_AGENT = "financial-radar/1.0 (personal RSS reader)"
 MAX_BYTES = 2_000_000
+LOCALES = {"en": "hl=en-US&gl=US&ceid=US:en", "es": "hl=es&gl=ES&ceid=ES:es"}  # edición de Google News
 _STOPWORDS = {"a", "an", "the", "of", "to", "in", "on", "for", "and", "or", "as", "is", "are", "it", "its", "at",
               "with", "after", "by", "from", "this", "that", "why", "what", "how", "today", "stock", "stocks",
               "shares", "inc", "corp"}
@@ -24,9 +25,10 @@ class Headline:
     link: str
 
 
-def feed_url(ticker: str, days: int = 14) -> str:
-    return (f"https://news.google.com/rss/search?q={urllib.parse.quote_plus(ticker)}+stock+when:{days}d"
-            "&hl=en-US&gl=US&ceid=US:en")
+def feed_url(ticker: str, days: int = 14, query: str | None = None, lang: str = "en") -> str:
+    """Por defecto "<ticker> stock" en la edición en inglés; query sustituye a esa búsqueda tal cual."""
+    q = urllib.parse.quote_plus(query) if query else f"{urllib.parse.quote_plus(ticker)}+stock"
+    return f"https://news.google.com/rss/search?q={q}+when:{days}d&{LOCALES[lang]}"
 
 
 def parse_feed(xml: bytes, now: datetime, days: int = 14) -> list[Headline]:
@@ -53,7 +55,7 @@ def parse_feed(xml: bytes, now: datetime, days: int = 14) -> list[Headline]:
 
 
 def _tokens(title: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z0-9$%]+", title.lower()) if w not in _STOPWORDS}
+    return {w for w in re.findall(r"[\w$%]+", title.lower()) if w not in _STOPWORDS}  # \w: tildes y ñ
 
 
 def dedupe(headlines: list[Headline], threshold: float = 0.5) -> list[Headline]:
@@ -68,9 +70,10 @@ def dedupe(headlines: list[Headline], threshold: float = 0.5) -> list[Headline]:
     return kept
 
 
-def fetch_news(ticker: str, limit: int = 10, now: datetime | None = None) -> list[Headline]:
+def fetch_news(ticker: str, limit: int = 10, now: datetime | None = None, query: str | None = None,
+               lang: str = "en") -> list[Headline]:
     """Hasta limit titulares deduplicados de los últimos 14 días."""
-    req = urllib.request.Request(feed_url(ticker), headers={"User-Agent": USER_AGENT})
+    req = urllib.request.Request(feed_url(ticker, query=query, lang=lang), headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             xml = resp.read(MAX_BYTES)

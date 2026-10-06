@@ -17,8 +17,11 @@ Cada posición se procesa por separado: si una falla, el resto sigue adelante, y
 |---|---|---|---|
 | MSFT, AMZN | ✓ | 10-K/10-Q | Completo |
 | MSTR | ✓; P/E −1,7, EBITDA negativo, cobertura de intereses −262,9 | 10-K/10-Q ("Strategy Inc") | Completo. El P/E sale `n/d` (≤ 0); el balance (D/E, cobertura, ROIC) es lo que informa del riesgo |
-| ESEA | ✓ | Sólo 20-F/6-K | `sec_enabled = false`: sólo cuantitativo |
 | BABA | ✓; estados financieros en CNY | Sólo 20-F/6-K | `sec_enabled = false`: sólo cuantitativo. Ratios sin unidad válidos |
+
+| NXT (Nextil, `NXT.MC`) | `fmp_enabled = false`: precio y volumen de Yahoo Finance | No (Bolsa de Madrid) | `sec_enabled = false`. Sin fundamentales; noticias en español (`news_query`, `news_lang = "es"`) |
+
+ESEA se elimina el 2026-10-06 (posición cerrada); `tax_exempt` se mantiene para futuras navieras. NXT entra el mismo día.
 
 REPLY (`REY.MI`) queda **eliminada**: el plan gratuito de FMP devuelve HTTP 402 para la Bolsa de Milán.
 
@@ -36,8 +39,17 @@ ticker_sec = "MSTR"       # opcional, por defecto = ticker
 peers = ["COIN", "PLTR", "MARA"]   # opcional, por defecto []
 sec_enabled = true        # opcional, por defecto true
 distorted_metrics = true  # opcional, por defecto false: margen, ROE y spread no representativos (añadido 2026-10-06)
-tax_exempt = false        # opcional, por defecto false: t = 0 en el coste neto de la deuda (ESEA, régimen de tonelaje)
+tax_exempt = false        # opcional, por defecto false: t = 0 en el coste neto de la deuda (navieras, régimen de tonelaje)
+# Añadidos el 2026-10-06 (posiciones sin cobertura FMP, como NXT):
+fmp_enabled = true        # opcional, por defecto true. false: sólo precio y volumen de Yahoo (exige ticker_yahoo)
+ticker_yahoo = "NXT.MC"   # opcional: símbolo en Yahoo Finance
+name = "Nueva Expresion Textil, S.A."  # opcional: razón social; Haiku la recibe como company="..."
+currency = "EUR"          # opcional: se muestra junto al precio
+news_query = 'Nextil OR "Nueva Expresion Textil"'  # opcional, por defecto "<ticker> stock"
+news_lang = "es"          # opcional, por defecto "en": edición de Google News (en, es)
 ```
+
+- `fmp_enabled = false` → `quant.yahoo(ticker_yahoo)` en vez de `quant.analyze`. El bloque muestra la línea de precio y `Fundamentales: n/d (sin cobertura FMP; precio y volumen de Yahoo Finance)` en lugar de cuatro líneas de `n/d`.
 
 - Se lee con `tomllib`.
 - **Validación estricta**, con `ValueError` que indica la posición:
@@ -102,7 +114,7 @@ tax_exempt = false        # opcional, por defecto false: t = 0 en el coste neto 
    ◦ CNBC, 25-09: Microsoft gives Copilot a much-needed overhaul, and the stock deservedly soars
 ```
 - `format_quant` devuelve las mismas líneas **en texto plano**, con las etiquetas `Val:`, `Op:`, `Eficiencia:` y `Solvencia:` (revisado el 2026-10-06; antes una sola línea `Balance:`). Ese texto es el que recibe `analyst` como `<financial_metrics>`; las negritas y los emojis se añaden sólo al componer el mensaje.
-- **El bloque de noticias cierra cada posición**, también las que tienen `sec_enabled = false` (ESEA, BABA), que no tienen línea de filing.
+- **El bloque de noticias cierra cada posición**, también las que tienen `sec_enabled = false` (BABA, NXT), que no tienen línea de filing.
 - **Métricas distorsionadas (revisado el 2026-10-06):** con `distorted_metrics = true` (MSTR), la línea `Op:` muestra `⚠️ margen -1676.7%: no representativo por tesorería en activos digitales; sin comparación con pares` y el spread del ROE sobre k lleva `⚠️ no representativo por tesorería en activos digitales` en vez de `crea/destruye valor`. Es fijo: no depende del margen del trimestre.
   - Red de seguridad para posiciones sin el flag: si `|margen operativo TTM| > 500 %` (`DISTORTED_MARGIN = 5.0`), el mismo tratamiento con el texto neutro `distorsionado (|margen| > 500 %)`.
   - Se omite la diferencia frente a pares, porque no significa nada en ese caso.
@@ -111,12 +123,12 @@ tax_exempt = false        # opcional, por defecto false: t = 0 en el coste neto 
 - **Solvencia:** `rd X% (neto Y%, t=Z%)`: coste bruto de la deuda, neto del escudo fiscal y tipo efectivo aplicado.
 - **Etiqueta de periodo:** `FY2026 Q4` (trimestre del **ejercicio fiscal** de la empresa: MSFT cierra en junio y BABA en marzo) o `FY2025` si hubo fallback anual.
 - **Alertas de filings** siguen en texto plano: su contenido es el render de `analyst`.
-- Valor ausente → `n/d`. Caja neta → `deuda neta/EBITDA caja neta`. El precio va sin símbolo de divisa.
-- Si `quant` falla en una posición → `TICKER: sin datos FMP (<error>)` y el resto sigue (salida 1).
+- Valor ausente → `n/d`. Caja neta → `deuda neta/EBITDA caja neta`. El precio va sin divisa salvo que la posición tenga `currency`, y con la variación de la última sesión cerrada: `NXT 1.01 EUR (-0.4% día)`.
+- Si `quant` falla en una posición → `TICKER: sin datos de mercado (<error>)` y el resto sigue (salida 1).
 - Coste: ~45 llamadas FMP por resumen (los pares compartidos se piden una vez), dentro del límite de 250/día.
 - **Noticias (añadido el 2026-10-03, `SPEC-news.md`):**
-  - para **todas** las posiciones, también ESEA y BABA, se ejecuta `news.fetch_news(ticker, limit=10)`;
-  - después, una sola llamada a `analyst.summarize_news(..., model=summary_model)`;
+  - para **todas** las posiciones, también BABA y NXT, se ejecuta `news.fetch_news(ticker, limit=10, query=news_query, lang=news_lang)`;
+  - después, una sola llamada a `analyst.summarize_news(..., model=summary_model, names={ticker: name})`; `name` desambigua tickers como NXT (Nextil, no Nextracker);
   - por posición se muestran `Noticias: <síntesis>` y los ≤ 3 titulares elegidos (`· fuente, dd-mm: título`, cortado a 120 caracteres);
   - si falla Haiku, se muestran los 3 primeros candidatos sin síntesis;
   - si falla el feed de un ticker, `Noticias: no disponibles`;

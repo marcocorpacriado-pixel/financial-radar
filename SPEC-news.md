@@ -5,11 +5,13 @@ Módulo hoja, sin dependencias. Convenciones comunes en `CAPABILITY_MAP.md`.
 
 ## Objetivo
 
-Aportar al resumen periódico de `radar` las noticias relevantes de los últimos 14 días de cada posición, también las que no reportan a la SEC (ESEA, BABA), a coste cero de datos. `news` sólo obtiene, filtra y deduplica titulares. Elegir los materiales y sintetizarlos es tarea de `analyst.summarize_news` (Haiku), coordinada por `radar`.
+Aportar al resumen periódico de `radar` las noticias relevantes de los últimos 14 días de cada posición, también las que no reportan a la SEC (BABA, NXT), a coste cero de datos. `news` sólo obtiene, filtra y deduplica titulares. Elegir los materiales y sintetizarlos es tarea de `analyst.summarize_news` (Haiku), coordinada por `radar`.
 
 ## Fuente (verificada el 2026-10-03)
 
 `https://news.google.com/rss/search?q={TICKER}+stock+when:14d&hl=en-US&gl=US&ceid=US:en`
+
+Con `news_query`/`news_lang` en la posición (añadido 2026-10-06, NXT): `q={news_query}+when:14d` y la edición de `LOCALES[news_lang]`; en español `hl=es&gl=ES&ceid=ES:es`. Para NXT (`Nextil OR "Nueva Expresion Textil"`) devuelve prensa española (El Economista, Expansión, Bolsamania…). La deduplicación tokeniza con `\w`, así que las palabras con tilde o ñ cuentan enteras.
 
 - RSS 2.0. Cada `<item>` tiene `title`, `link`, `guid`, `pubDate`, `description` y `source`.
 - El título termina en ` - {source}` (`Has MSFT Stock Run Out Of Steam? - trefis.com`).
@@ -28,7 +30,9 @@ class Headline:
     published: datetime     # aware, UTC
     link: str
 
-def feed_url(ticker: str, days: int = 14) -> str: ...
+LOCALES = {"en": "hl=en-US&gl=US&ceid=US:en", "es": "hl=es&gl=ES&ceid=ES:es"}
+def feed_url(ticker: str, days: int = 14, query: str | None = None, lang: str = "en") -> str: ...
+def fetch_news(ticker, limit=10, now=None, query=None, lang="en") -> list[Headline]: ...
 def parse_feed(xml: bytes, now: datetime, days: int = 14) -> list[Headline]:
     """Items válidos dentro de la ventana, en el orden del feed (relevancia de Google)."""
 def dedupe(headlines: list[Headline], threshold: float = 0.5) -> list[Headline]:

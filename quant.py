@@ -9,10 +9,14 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import asdict, dataclass
+import time
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 BASE = "https://financialmodelingprep.com/stable/"
+YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/"
+# Sin un User-Agent de navegador Yahoo responde 403/429.
+YAHOO_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 MAX_PEERS, MIN_PEERS, HIST_YEARS = 5, 3, 5
 calls_made = 0
 RF_FALLBACK = 0.04  # sin FMP: bono a 10 años aproximado
@@ -25,6 +29,7 @@ RF_CACHE, RF_TTL = Path("cache/fmp-treasury.json"), datetime.timedelta(hours=24)
 class Metrics:
     symbol: str
     price: float | None
+    change_1d: float | None
     pe_ttm: float | None
     ev_ebitda_ttm: float | None
     operating_margin_last: float | None
@@ -63,7 +68,7 @@ class Report:
     peer_median_operating_margin: float | None
     pe_vs_peers: float | None
     margin_vs_peers: float | None
-    risk_free_rate: float
+    risk_free_rate: float | None  # None sólo en informes de Yahoo (sin FMP)
     cost_of_equity: float | None
     roe_spread: float | None
     cost_of_debt: float | None
@@ -295,6 +300,7 @@ def analyze(symbol: str, peers: list[str] | None = None, tax_exempt: bool = Fals
         metrics=Metrics(
             symbol=symbol,
             price=num(prices[-1].get("price")) if prices else None,
+            change_1d=relative(num(prices[-1].get("price")), num(prices[-2].get("price"))) if len(prices) > 1 else None,
             pe_ttm=pe,
             ev_ebitda_ttm=ev,
             operating_margin_last=margin_last,
@@ -336,6 +342,47 @@ def analyze(symbol: str, peers: list[str] | None = None, tax_exempt: bool = Fals
         tax_rate=t,
         cost_of_debt_after_tax=rd * (1 - t) if rd is not None and t is not None else None,
     )
+
+
+# --- Yahoo Finance (posiciones sin cobertura FMP) ---------------------------
+
+def yahoo_report(symbol: str, data, now: float) -> Report:
+    """Report con precio, variación diaria y volumen del chart de Yahoo; múltiplos y balance quedan None."""
+    try:
+        result = data["chart"]["result"][0]
+        quote = result["indicators"]["quote"][0]
+        rows = list(zip(result["timestamp"], quote["close"], quote["volume"]))
+        regular = result["meta"].get("currentTradingPeriod", {}).get("regular", {})
+    except (KeyError, IndexError, TypeError, AttributeError):
+        raise RuntimeError(f"Yahoo {symbol}: respuesta sin serie de precios") from None
+    start, end = num(regular.get("start")), num(regular.get("end"))
+    # La sesión en curso lleva volumen parcial: sólo cuentan sesiones cerradas, como en el EOD de FMP.
+    if rows and start is not None and end is not None and num(rows[-1][0]) is not None and start <= rows[-1][0] and now < end:
+        rows.pop()
+    sessions = [(num(c), num(v)) for _, c, v in rows if num(c) is not None]
+    closes, volumes = [c for c, _ in sessions], [v for _, v in sessions]
+    volume, avg30 = (volumes[-1] if volumes else None), avg_volume(volumes)
+    metrics = dict.fromkeys(f.name for f in fields(Metrics))
+    report = dict.fromkeys(f.name for f in fields(Report))
+    return Report(**{**report, "peers": (), "volume_divergence": relative(volume, avg30), "metrics": Metrics(**{
+        **metrics, "symbol": symbol, "net_cash": False, "price": closes[-1] if closes else None,
+        "change_1d": relative(closes[-1], closes[-2]) if len(closes) > 1 else None,
+        "volume": volume, "volume_avg_30d": avg30})})
+
+
+def yahoo(symbol: str) -> Report:
+    """Precio y volumen de los últimos 3 meses (1mo sólo trae ~21 sesiones: no llega para la media de 30)."""
+    url = YAHOO_CHART + urllib.parse.quote(symbol) + "?interval=1d&range=3mo"
+    req = urllib.request.Request(url, headers={"User-Agent": YAHOO_UA})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:
+        e.close()
+        raise RuntimeError(f"Yahoo {symbol}: HTTP {e.code}") from None
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Yahoo {symbol}: sin conexión ({e.reason})") from None
+    return yahoo_report(symbol, data, time.time())
 
 
 if __name__ == "__main__":

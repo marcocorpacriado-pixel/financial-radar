@@ -179,6 +179,7 @@ class AnalyzeTest(FMPTestCase):
         r = quant.analyze("aaa")
         m = r.metrics
         self.assertEqual(m.symbol, "AAA")
+        self.assertAlmostEqual(m.change_1d, 0.25)                      # 50 / 40 - 1 (última sesión vs anterior)
         self.assertEqual((m.price, m.pe_ttm, m.ev_ebitda_ttm, m.operating_margin_ttm), (50.0, 30.0, 20.0, 0.25))
         self.assertAlmostEqual(m.operating_margin_last, 0.25)          # 30 / 120
         self.assertAlmostEqual(m.revenue_growth_yoy, 0.2)              # 120 / 100 - 1 (Q3 vs Q3)
@@ -387,6 +388,71 @@ class ErrorsTest(FMPTestCase):
             with self.assertRaisesRegex(RuntimeError, "FMP_API_KEY"):
                 quant.analyze("AAA", [])
         self.assertEqual(self.fmp.calls, [])
+
+
+# --- Yahoo Finance --------------------------------------------------------
+
+DAY = 86400
+OPEN = 1_791_270_000  # apertura de la sesión de hoy (epoch)
+
+
+def chart(closes, volumes, end=OPEN + 9 * 3600):
+    """Respuesta de /v8/finance/chart como la da Yahoo: una barra por sesión, la última es la de hoy."""
+    stamps = [OPEN - (len(closes) - 1 - i) * DAY for i in range(len(closes))]
+    return {"chart": {"error": None, "result": [{
+        "meta": {"currency": "EUR", "symbol": "NXT.MC", "regularMarketPrice": 1.014,
+                 "currentTradingPeriod": {"regular": {"start": OPEN, "end": end}}},
+        "timestamp": stamps, "indicators": {"quote": [{"close": closes, "volume": volumes}]}}]}}
+
+
+# 30 sesiones a 1.0 con 100 de volumen, ayer 1.05 con 250, y la de hoy en curso (cierre null, volumen parcial).
+NXT = chart([1.0] * 30 + [1.05, None], [100] * 30 + [250, 3])
+
+
+class YahooTest(unittest.TestCase):
+    def test_closed_sessions_only(self):
+        r = quant.yahoo_report("NXT.MC", NXT, now=OPEN + 3600)  # mercado abierto
+        m = r.metrics
+        self.assertEqual((m.symbol, m.price, m.volume, m.volume_avg_30d), ("NXT.MC", 1.05, 250, 100))
+        self.assertAlmostEqual(m.change_1d, 0.05)
+        self.assertAlmostEqual(r.volume_divergence, 1.5)
+        # Sin FMP: múltiplos, balance y coste de capital quedan None, nunca 0.
+        self.assertEqual((m.pe_ttm, m.roe, m.dso, m.net_debt_to_ebitda, m.net_cash), (None, None, None, None, False))
+        self.assertEqual((r.risk_free_rate, r.cost_of_equity, r.peers, r.pe_vs_peers), (None, None, (), None))
+
+    def test_after_close_today_counts(self):
+        data = chart([1.0] * 31 + [0.9], [100] * 31 + [400])
+        r = quant.yahoo_report("NXT.MC", data, now=OPEN + 10 * 3600)  # después del cierre
+        self.assertEqual((r.metrics.price, r.metrics.volume), (0.9, 400))
+        self.assertAlmostEqual(r.metrics.change_1d, -0.1)
+        self.assertAlmostEqual(r.volume_divergence, 3.0)
+
+    def test_short_or_holey_series(self):
+        r = quant.yahoo_report("NXT.MC", chart([1.0, None, 1.1, None], [10, None, 20, 1]), now=OPEN)
+        self.assertEqual(r.metrics.price, 1.1)
+        self.assertAlmostEqual(r.metrics.change_1d, 0.1)       # el festivo (null) no cuenta como sesión
+        self.assertEqual((r.metrics.volume_avg_30d, r.volume_divergence), (None, None))
+        empty = quant.yahoo_report("NXT.MC", chart([], []), now=OPEN)
+        self.assertEqual((empty.metrics.price, empty.metrics.change_1d), (None, None))
+
+    def test_malformed_response(self):
+        for data in ({"chart": {"result": None, "error": {"code": "Not Found"}}}, {}, [], {"chart": {"result": [{}]}}):
+            with self.assertRaisesRegex(RuntimeError, "Yahoo NXT.MC"):
+                quant.yahoo_report("NXT.MC", data, now=OPEN)
+
+    def test_fetch_uses_browser_user_agent_and_3mo(self):
+        with patch("quant.urllib.request.urlopen", return_value=io.BytesIO(json.dumps(NXT).encode())) as urlopen:
+            r = quant.yahoo("NXT.MC")
+        req = urlopen.call_args.args[0]
+        self.assertEqual(req.full_url, "https://query1.finance.yahoo.com/v8/finance/chart/NXT.MC?interval=1d&range=3mo")
+        self.assertTrue(req.get_header("User-agent").startswith("Mozilla/5.0"))
+        self.assertEqual(r.metrics.symbol, "NXT.MC")
+
+    def test_http_error(self):
+        err = urllib.error.HTTPError("u", 429, "Too Many Requests", {}, io.BytesIO(b""))
+        with patch("quant.urllib.request.urlopen", side_effect=err):
+            with self.assertRaisesRegex(RuntimeError, "Yahoo NXT.MC: HTTP 429"):
+                quant.yahoo("NXT.MC")
 
 
 if __name__ == "__main__":

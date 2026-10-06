@@ -1,4 +1,5 @@
 """Síntesis del MD&A con Claude y citas verificadas. Spec: SPEC-analyst.md."""
+import html
 import json
 import os
 import re
@@ -238,7 +239,7 @@ NEWS_SCHEMA = {
     "required": ["positions"],
     "additionalProperties": False,
 }
-NEWS_PROMPT = """You screen recent news headlines for an equity portfolio. Each ticker's headlines arrive numbered inside <headlines ticker="...">.
+NEWS_PROMPT = """You screen recent news headlines for an equity portfolio. Each ticker's headlines arrive numbered inside <headlines ticker="...">, with a company="..." attribute when the ticker alone is ambiguous (headlines may be in English or Spanish).
 - Pick at most 3 headlines that report a fact with material impact on that company's valuation, in one of three groups:
   1. Capital allocation: share or convertible-debt issuance, shelf registrations, buybacks, dividend changes, M&A, large asset purchases or sales.
   2. Operating or regulatory shocks: litigation, tariffs, sanctions, regulatory actions, strategic contracts or the loss of a major customer.
@@ -255,9 +256,13 @@ class NewsDigest:
     picks: tuple[int, ...]
 
 
-def summarize_news(headlines: dict[str, list[str]], model: str = NEWS_MODEL) -> dict[str, NewsDigest]:
-    """Una llamada para toda la cartera: por ticker, los titulares materiales y su síntesis."""
-    blocks = [f'<headlines ticker="{t}">\n' + "\n".join(f"[{i}] {h}" for i, h in enumerate(hs)) + "\n</headlines>"
+def summarize_news(headlines: dict[str, list[str]], model: str = NEWS_MODEL,
+                   names: dict[str, str] | None = None) -> dict[str, NewsDigest]:
+    """Una llamada para toda la cartera: por ticker, los titulares materiales y su síntesis.
+    names: razón social de los tickers ambiguos (NXT es Nextil en Madrid, no Nextracker)."""
+    names = names or {}
+    blocks = [f'<headlines ticker="{t}"' + (f' company="{html.escape(names[t])}"' if names.get(t) else "") + ">\n"
+              + "\n".join(f"[{i}] {h}" for i, h in enumerate(hs)) + "\n</headlines>"
               for t, hs in headlines.items() if hs]
     if not blocks:
         return {}

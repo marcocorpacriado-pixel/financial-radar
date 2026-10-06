@@ -96,7 +96,20 @@ Unidades: márgenes, crecimientos, yields, primas y divergencias como **fracció
 | `cost_of_debt_after_tax` | `rd × (1 - tax_rate)` | `None` si falta rd o t. |
 | `dso`, `dio`, `dpo`, `cash_conversion_cycle` | `key-metrics-ttm.daysOf{Sales,Inventory,Payables}OutstandingTTM`, `cashConversionCycleTTM` (están en key-metrics-ttm, no en ratios-ttm) | `cash_cycle(dso, dio, dpo, fmp_ccc)`: `DSO + (DIO or 0) - DPO`; sin DSO o DPO, el CCC de FMP. **DSO = 0 → `None`**: es un dato no reportado (BABA, −233 d falsos), no cobro al contado. |
 
-Límite conocido: rf y ERP son de EE. UU. también para BABA y ESEA.
+Límite conocido: rf y ERP son de EE. UU. también para BABA.
+
+### Posiciones sin FMP: Yahoo Finance (añadido 2026-10-06)
+
+```python
+def yahoo(symbol: str) -> Report: ...                              # GET + yahoo_report
+def yahoo_report(symbol: str, data, now: float) -> Report: ...   # pura, con test
+```
+
+- `https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=3mo` con `urllib.request` y un User-Agent de navegador (sin él, 403/429). `range=1mo` sólo trae ~21 sesiones (NXT.MC: 21), insuficientes para la media de 30 sesiones; por eso `3mo` (~66).
+- Sólo sesiones **cerradas**: si la última barra pertenece a la sesión en curso (`meta.currentTradingPeriod.regular`: `start <= ts` y `now < end`), se descarta, porque su volumen es parcial (NXT.MC a las 08:40: 1.978 títulos frente a ~1 M de media). Las barras con cierre `null` (festivos) no cuentan.
+- `price` = último cierre; `change_1d` = cierre / cierre anterior − 1; `volume`, `volume_avg_30d` y `volume_divergence` con `avg_volume`, igual que con FMP.
+- Todo lo demás es `None` (también `risk_free_rate` y `cost_of_equity`), `net_cash=False`, `peers=()`. Respuesta sin serie o error HTTP → `RuntimeError("Yahoo {symbol}: …")`.
+- `change_1d` también se rellena con FMP: última sesión frente a la anterior de `historical-price-eod/light`, sin llamadas extra.
 
 ## Reglas de cálculo (funciones puras, todas con test)
 

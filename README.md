@@ -69,9 +69,19 @@ ticker = "MSFT"
 peers = ["GOOGL", "AMZN", "AAPL", "ORCL"]
 
 [[positions]]
-ticker = "ESEA"
-peers = ["DAC", "GSL", "ZIM"]
+ticker = "BABA"
+peers = ["JD", "PDD", "BIDU", "TCEHY"]
 sec_enabled = false   # emisor extranjero (20-F): sólo análisis cuantitativo y noticias
+
+[[positions]]
+ticker = "NXT"        # sin cobertura FMP: precio y volumen de Yahoo, noticias en español
+name = "Nueva Expresion Textil, S.A."
+ticker_yahoo = "NXT.MC"
+currency = "EUR"
+sec_enabled = false
+fmp_enabled = false
+news_query = 'Nextil OR "Nueva Expresion Textil"'
+news_lang = "es"
 ```
 
 Campos por posición:
@@ -84,7 +94,13 @@ Campos por posición:
 | `peers` | no | Pares fijados a mano (nunca se usa la lista automática de FMP) |
 | `sec_enabled` | no (por defecto `true`) | `false` para emisores sin 10-K/10-Q |
 | `distorted_metrics` | no (por defecto `false`) | `true` = margen, ROE y spread marcados como no representativos (MSTR: tesorería en bitcoin) |
-| `tax_exempt` | no (por defecto `false`) | `true` = tipo impositivo 0 en el coste neto de la deuda (ESEA: régimen de tonelaje) |
+| `tax_exempt` | no (por defecto `false`) | `true` = tipo impositivo 0 en el coste neto de la deuda (navieras en régimen de tonelaje) |
+| `fmp_enabled` | no (por defecto `true`) | `false` = sin FMP: sólo precio, variación diaria y volumen de Yahoo Finance (exige `ticker_yahoo`) |
+| `ticker_yahoo` | no | Símbolo en Yahoo Finance (`NXT.MC`) |
+| `name` | no | Razón social; ayuda a Haiku con tickers ambiguos |
+| `currency` | no | Divisa mostrada junto al precio |
+| `news_query` | no (por defecto `<ticker> stock`) | Búsqueda de Google News |
+| `news_lang` | no (por defecto `en`) | Edición de Google News: `en` o `es` |
 
 ## Uso
 

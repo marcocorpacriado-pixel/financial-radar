@@ -22,8 +22,10 @@ STATE = Path("state.json")
 FORMS = ("10-K", "10-Q")
 SENT_TTL = timedelta(days=180)
 DISTORTED_MARGIN = 5.0  # |margen operativo| > 500 %: red de seguridad para posiciones sin distorted_metrics
-_LABELS = ("Val", "Op", "Eficiencia", "Solvencia", "Filing")
-_POSITION_KEYS = {"ticker", "ticker_fmp", "ticker_sec", "peers", "sec_enabled", "distorted_metrics", "tax_exempt"}
+_LABELS = ("Val", "Op", "Eficiencia", "Solvencia", "Fundamentales", "Filing")
+_POSITION_KEYS = {"ticker", "ticker_fmp", "ticker_sec", "peers", "sec_enabled", "distorted_metrics", "tax_exempt",
+                  "fmp_enabled", "name", "ticker_yahoo", "currency", "news_query", "news_lang"}
+NO_FUNDAMENTALS = "Fundamentales: n/d (sin cobertura FMP; precio y volumen de Yahoo Finance)"
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,12 @@ class Position:
     sec_enabled: bool
     distorted_metrics: bool = False  # tesorería en activos digitales (MSTR): margen, ROE y spread no representativos
     tax_exempt: bool = False         # régimen de tonelaje (navieras): t = 0 en el coste neto de la deuda
+    fmp_enabled: bool = True         # false: sólo precio y volumen de Yahoo (ticker_yahoo), sin FMP
+    name: str | None = None          # razón social: desambigua el ticker ante Haiku
+    ticker_yahoo: str | None = None
+    currency: str | None = None      # se muestra junto al precio
+    news_query: str | None = None    # búsqueda de Google News; por defecto "<ticker> stock"
+    news_lang: str = "en"            # edición de Google News (news.LOCALES)
 
 
 @dataclass(frozen=True)
@@ -75,7 +83,15 @@ def load_portfolio(path: Path = PORTFOLIO) -> Config:
                 and isinstance(peers, list) and all(isinstance(p, str) for p in peers)):
             raise ValueError(f"{where}: ticker_fmp/ticker_sec deben ser texto, peers una lista de textos "
                              "y sec_enabled/distorted_metrics/tax_exempt true/false")
-        positions.append(Position(ticker, fmp, sec, tuple(peers), *flags))
+        texts = {k: raw.get(k) for k in ("name", "ticker_yahoo", "currency", "news_query")}
+        fmp_enabled, lang = raw.get("fmp_enabled", True), raw.get("news_lang", "en")
+        if not (isinstance(fmp_enabled, bool) and all(v is None or (isinstance(v, str) and v) for v in texts.values())):
+            raise ValueError(f"{where}: name/ticker_yahoo/currency/news_query deben ser texto y fmp_enabled true/false")
+        if lang not in news.LOCALES:
+            raise ValueError(f"{where}: news_lang debe ser uno de {sorted(news.LOCALES)}")
+        if not fmp_enabled and not texts["ticker_yahoo"]:
+            raise ValueError(f"{where}: fmp_enabled = false necesita ticker_yahoo")
+        positions.append(Position(ticker, fmp, sec, tuple(peers), *flags, fmp_enabled=fmp_enabled, news_lang=lang, **texts))
     if not positions:
         raise ValueError(f"{path}: no hay posiciones")
     return Config(days, *models, positions)
@@ -126,7 +142,8 @@ def _pp(x: float | None) -> str:
     return "n/d" if x is None else f"{x * 100:+.1f} pp"
 
 
-def format_quant(report: quant.Report, ticker: str, distorted_metrics: bool = False) -> list[str]:
+def format_quant(report: quant.Report, ticker: str, distorted_metrics: bool = False,
+                 currency: str | None = None) -> list[str]:
     """Bloque de métricas: lo muestra el resumen y lo recibe analyst como <financial_metrics>."""
     m, r = report.metrics, report
     growth = "n/d" if m.revenue_growth_yoy is None else f"{_delta(m.revenue_growth_yoy)} YoY ({m.last_period})"
@@ -149,7 +166,9 @@ def format_quant(report: quant.Report, ticker: str, distorted_metrics: bool = Fa
     else:
         margin = f"margen {_pct(m.operating_margin_ttm)} (pares {_pp(r.margin_vs_peers)})"
     return [
-        f"{ticker} {_n(m.price, 2)} · volumen {_delta(r.volume_divergence)} vs media 30 sesiones",
+        f"{ticker} {_n(m.price, 2)}{' ' + currency if currency else ''}"
+        f"{'' if m.change_1d is None else f' ({round(m.change_1d * 100, 1) or 0.0:+.1f}% día)'} · "  # sin '-0.0%'
+        f"volumen {_delta(r.volume_divergence)} vs media 30 sesiones",
         f"Val: P/E {_n(m.pe_ttm)} (hist {_delta(r.pe_vs_hist)}, pares {_delta(r.pe_vs_peers)}) · "
         f"EV/EBITDA {_n(m.ev_ebitda_ttm)} (hist {_delta(r.ev_ebitda_vs_hist)})",
         f"Op: {margin} · ingresos {growth} · FCF yield {_pct(m.fcf_yield)}",
@@ -228,6 +247,8 @@ def run(positions: list[Position], days: int, state: dict, now: datetime, *,
         state["sent"][digest] = now.isoformat()
 
     def metrics(pos):
+        if not pos.fmp_enabled:
+            return format_quant(quant.yahoo(pos.ticker_yahoo), pos.ticker, currency=pos.currency)[:1] + [NO_FUNDAMENTALS]
         return format_quant(quant.analyze(pos.ticker_fmp, list(pos.peers), tax_exempt=pos.tax_exempt),
                             pos.ticker, pos.distorted_metrics)
 
@@ -299,7 +320,7 @@ def run(positions: list[Position], days: int, state: dict, now: datetime, *,
                 lines = metrics(pos)
             except Exception as e:
                 errors += 1
-                lines = [f"{pos.ticker}: sin datos FMP ({e})"]
+                lines = [f"{pos.ticker}: sin datos de mercado ({e})"]
             else:
                 tstate = state["tickers"].setdefault(pos.ticker, {})
                 if pos.sec_enabled and "last_analysis" not in tstate and latest.get(pos.ticker):
@@ -314,14 +335,14 @@ def run(positions: list[Position], days: int, state: dict, now: datetime, *,
                     lines.append(f"Filing: {la['form']} {la['filing_date']} · "
                                  f"Riesgo/Cat.: {la['catalyst'] or 'sin catalizadores verificados'}")
             try:  # las noticias son un complemento: sus fallos no cambian el código de salida
-                headlines[pos.ticker] = news.fetch_news(pos.ticker, limit=10)
+                headlines[pos.ticker] = news.fetch_news(pos.ticker, limit=10, query=pos.news_query, lang=pos.news_lang)
             except Exception as e:
                 headlines[pos.ticker] = None
                 log(f"{pos.ticker}: noticias no disponibles ({e})")
             blocks.append((pos, lines))
         try:
             digests = analyst.summarize_news({t: [_candidate(h) for h in hs] for t, hs in headlines.items() if hs},
-                                             model=summary_model)
+                                             model=summary_model, names={p.ticker: p.name for p in positions if p.name})
             synthesized = True
         except Exception as e:
             digests, synthesized = {}, False

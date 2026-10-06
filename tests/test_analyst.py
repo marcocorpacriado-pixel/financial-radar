@@ -289,6 +289,15 @@ class NewsTest(ApiTestCase):
         self.assertIn("[1] Ship purchases", content)
         self.assertNotIn('ticker="BABA"', content)  # sin titulares no se envía
 
+    def test_company_names_disambiguate_tickers(self):
+        self.responses = [news_body([])]
+        analyst.summarize_news({"NXT": ["Nextil aprueba una ampliación de capital (Cinco Días, 30-09)"], **HEADLINES},
+                               names={"NXT": "Nueva Expresion Textil, S.A.", "ESEA": 'Euro"seas <Ltd>'})
+        content = json.loads(self.requests[0].data)["messages"][0]["content"]
+        self.assertIn('<headlines ticker="NXT" company="Nueva Expresion Textil, S.A.">\n[0] Nextil', content)
+        self.assertIn('<headlines ticker="ESEA" company="Euro&quot;seas &lt;Ltd&gt;">', content)
+        self.assertIn('<headlines ticker="MSFT">', content)  # sin nombre, sin atributo
+
     def test_only_grounded_picks_survive(self):
         self.responses = [news_body([
             {"ticker": "MSFT", "summary": "Microsoft renueva Copilot y la acción sube.", "picks": [1, 2, 1]},

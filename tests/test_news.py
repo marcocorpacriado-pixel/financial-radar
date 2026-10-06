@@ -60,6 +60,12 @@ class DedupeTest(unittest.TestCase):
         out = news.dedupe([first, self.h("Microsoft stock soars as it unveils Copilot overhaul"), self.h("Azure wins Pentagon cloud deal")])
         self.assertEqual([x.title for x in out], [first.title, "Azure wins Pentagon cloud deal"])
 
+    def test_spanish_accents_are_words(self):
+        first = self.h("Nextil reduce pérdidas y amplía capital")
+        out = news.dedupe([first, self.h("Nextil amplía capital y reduce pérdidas"), self.h("Nextil cierra una venta")])
+        self.assertEqual([x.title for x in out], [first.title, "Nextil cierra una venta"])
+        self.assertEqual(news._tokens("Expresión Textil: ampliación"), {"expresión", "textil", "ampliación"})
+
     def test_different_stories_same_company_are_kept(self):
         titles = ["Microsoft stock rises", "Microsoft stock falls", "Microsoft raises dividend 10%"]
         self.assertEqual([x.title for x in news.dedupe([self.h(t) for t in titles])], titles)
@@ -69,6 +75,22 @@ class FetchNewsTest(unittest.TestCase):
     def test_url_matches_template(self):
         self.assertEqual(news.feed_url("MSFT"),
                          "https://news.google.com/rss/search?q=MSFT+stock+when:14d&hl=en-US&gl=US&ceid=US:en")
+
+    def test_spanish_custom_query_url(self):
+        self.assertEqual(news.feed_url("NXT", query='Nextil OR "Nueva Expresion Textil"', lang="es"),
+                         "https://news.google.com/rss/search?q=Nextil+OR+%22Nueva+Expresion+Textil%22+when:14d"
+                         "&hl=es&gl=ES&ceid=ES:es")
+
+    def test_fetch_spanish_feed(self):
+        xml = feed(item("Nextil eleva sus ventas un 20% en el semestre - Expansión", "Expansión",
+                        "Thu, 01 Oct 2026 08:00:00 GMT", "https://g/n1"),
+                   item("Nextil aprueba una ampliación de capital - Cinco Días", "Cinco Días",
+                        "Wed, 30 Sep 2026 17:30:00 +0200", "https://g/n2"))
+        with patch("news.urllib.request.urlopen", return_value=io.BytesIO(xml)) as urlopen:
+            out = news.fetch_news("NXT", now=NOW, query="Nextil", lang="es")
+        self.assertEqual([(h.title, h.source) for h in out], [("Nextil eleva sus ventas un 20% en el semestre", "Expansión"),
+                                                              ("Nextil aprueba una ampliación de capital", "Cinco Días")])
+        self.assertEqual(urlopen.call_args.args[0].full_url, news.feed_url("NXT", query="Nextil", lang="es"))
 
     def test_fetch_dedupes_then_limits(self):
         xml = feed(item("Microsoft unveils Copilot overhaul, stock soars - CNBC", "CNBC"),

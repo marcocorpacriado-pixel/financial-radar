@@ -18,6 +18,8 @@ import sec_mdna
 NOW = datetime(2026, 10, 3, 21, 30, tzinfo=timezone.utc)
 MSFT = radar.Position("MSFT", "MSFT", "MSFT", ("GOOGL", "AMZN", "AAPL"), True)
 ESEA = radar.Position("ESEA", "ESEA", "ESEA", ("DAC", "GSL", "ZIM"), False)
+NXT = radar.Position("NXT", "NXT", "NXT", (), False, fmp_enabled=False, name="Nueva Expresion Textil, S.A.",
+                     ticker_yahoo="NXT.MC", currency="EUR", news_query='Nextil OR "Nueva Expresion Textil"', news_lang="es")
 
 
 def report(symbol="MSFT", **values):
@@ -73,6 +75,10 @@ class PortfolioTest(unittest.TestCase):
                      '[[positions]]\nticker = "A"\nsec_enabled = "no"\n',                # tipo
                      '[[positions]]\nticker = "A"\ndistorted_metrics = 1\n',            # tipo
                      '[[positions]]\nticker = "A"\ntax_exempt = "yes"\n',               # tipo
+                     '[[positions]]\nticker = "A"\nfmp_enabled = false\n',              # sin ticker_yahoo
+                     '[[positions]]\nticker = "A"\nnews_lang = "fr"\n',                 # edición no soportada
+                     '[[positions]]\nticker = "A"\ncurrency = 978\n',                   # tipo
+                     '[[positions]]\nticker = "A"\nnews_query = ""\n',                  # vacío
                      'summary_every_days = 0\n[[positions]]\nticker = "A"\n',
                      'summary_every_days = 12\n',                                        # sin posiciones
                      'otra = 1\n[[positions]]\nticker = "A"\n',
@@ -89,11 +95,12 @@ class PortfolioTest(unittest.TestCase):
             "MSFT": (("GOOGL", "AMZN", "AAPL", "ORCL"), True),
             "AMZN": (("MSFT", "WMT", "GOOGL"), True),
             "MSTR": (("COIN", "PLTR", "MARA"), True),
-            "ESEA": (("DAC", "GSL", "ZIM"), False),
             "BABA": (("JD", "PDD", "BIDU", "TCEHY"), False),
+            "NXT": ((), False),
         })
         self.assertEqual({p.ticker for p in cfg.positions if p.distorted_metrics}, {"MSTR"})
-        self.assertEqual({p.ticker for p in cfg.positions if p.tax_exempt}, {"ESEA"})
+        self.assertEqual({p.ticker for p in cfg.positions if p.tax_exempt}, set())
+        self.assertEqual(next(p for p in cfg.positions if p.ticker == "NXT"), NXT)
 
     def test_flags(self):
         cfg = self.load('[[positions]]\nticker = "X"\ndistorted_metrics = true\ntax_exempt = true\nsec_enabled = false\n')
@@ -133,6 +140,11 @@ class FormatTest(unittest.TestCase):
             EFFICIENCY,
             SOLVENCY,
         ])
+
+    def test_currency_and_daily_change(self):
+        lines = radar.format_quant(report(price=1.05, change_1d=-0.0417, volume_divergence=1.5), "NXT", currency="EUR")
+        self.assertEqual(lines[0], "NXT 1.05 EUR (-4.2% día) · volumen +150% vs media 30 sesiones")
+        self.assertIn("(+0.0% día)", radar.format_quant(report(change_1d=-0.0001), "X")[0])
 
     def test_missing_values(self):
         self.assertEqual(radar.format_quant(report(), "MSTR"), [
@@ -206,7 +218,7 @@ class RunTestCase(unittest.TestCase):
         self.metrics_seen, self.models_seen, self.tax_exempt_seen = [], [], {}
         self.news = {}              # ticker -> lista de Headline o excepción
         self.digests = {}           # resultado de summarize_news o excepción
-        self.news_calls = []
+        self.news_calls, self.news_queries = [], {}
         self.send = Mock()
         self.sec_filings = Mock(side_effect=lambda t, form: self.filings.get((t, form), []))
         for target, fake in (("quant.analyze", self.fake_quant),
@@ -238,15 +250,17 @@ class RunTestCase(unittest.TestCase):
             raise self.analysis
         return self.analysis
 
-    def fake_fetch_news(self, ticker, limit):
+    def fake_fetch_news(self, ticker, limit, query=None, lang="en"):
         self.assertEqual(limit, 10)
+        self.news_queries[ticker] = (query, lang)
         r = self.news.get(ticker, [])
         if isinstance(r, Exception):
             raise r
         return r
 
-    def fake_summarize_news(self, headlines, model):
+    def fake_summarize_news(self, headlines, model, names=None):
         self.news_calls.append((headlines, model))
+        self.news_names = names
         if isinstance(self.digests, Exception):
             raise self.digests
         return self.digests
@@ -347,7 +361,7 @@ class SummaryTest(RunTestCase):
         self.assertEqual(self.run_radar(state, positions=(MSFT, ESEA), force_summary=True), 1)
         text = self.send.call_args.args[0]
         self.assertIn("🔹 <b>MSFT</b> 512.30", text)
-        self.assertIn("🔹 <b>ESEA</b>: sin datos FMP (FMP ratios-ttm: HTTP 402)", text)
+        self.assertIn("🔹 <b>ESEA</b>: sin datos de mercado (FMP ratios-ttm: HTTP 402)", text)
 
     def test_position_flags_reach_quant_and_format(self):
         positions = (replace(MSFT, distorted_metrics=True), replace(ESEA, tax_exempt=True))
@@ -409,6 +423,24 @@ class NewsInSummaryTest(RunTestCase):
         self.assertIn("🔹 <b>ESEA</b> 512.30", text)
         self.assertIn("\n💡 <b>Noticias:</b> no disponibles", text)
         self.assertNotIn("ESEA", self.news_calls[0][0])
+
+    def test_yahoo_position_end_to_end(self):
+        # NXT: precio y volumen de Yahoo (nunca FMP), noticias en español con su búsqueda y razón social para Haiku.
+        self.news["NXT"] = [headline("Nextil aprueba una ampliación de capital", "Cinco Días")]
+        self.digests = {"NXT": analyst.NewsDigest("Nextil aprueba una ampliación de capital.", (0,))}
+        yahoo = Mock(return_value=report("NXT.MC", price=1.05, change_1d=0.05, volume_divergence=1.5))
+        with patch("quant.yahoo", yahoo):
+            code = self.run_radar(self.known_state(q="Q2"), positions=(MSFT, NXT), force_summary=True)
+        text = self.send.call_args.args[0]
+        self.assertEqual(code, 0)
+        yahoo.assert_called_once_with("NXT.MC")
+        self.assertNotIn("NXT", self.tax_exempt_seen)  # quant.analyze (FMP) no se llama para NXT
+        self.assertIn("🔹 <b>NXT</b> 1.05 EUR (+5.0% día) · volumen +150% vs media 30 sesiones\n"
+                      "• <b>Fundamentales:</b> n/d (sin cobertura FMP; precio y volumen de Yahoo Finance)\n"
+                      "💡 <b>Noticias:</b> Nextil aprueba una ampliación de capital.\n"
+                      "   ◦ Cinco Días, 25-09: Nextil aprueba una ampliación de capital", text)
+        self.assertEqual(self.news_queries, {"MSFT": (None, "en"), "NXT": ('Nextil OR "Nueva Expresion Textil"', "es")})
+        self.assertEqual(self.news_names, {"NXT": "Nueva Expresion Textil, S.A."})
 
     def test_long_headline_cut(self):
         self.news["MSFT"] = [headline("x" * 300)]
