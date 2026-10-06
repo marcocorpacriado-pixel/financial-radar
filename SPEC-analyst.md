@@ -173,6 +173,7 @@ def summarize_news(headlines: dict[str, list[str]], model: str = NEWS_MODEL) -> 
   - lista vacía si no hay nada material.
 - **Esquema:** `{"positions": [{"ticker", "summary", "picks": [int]}]}`.
 - **Validación anti-alucinación** (función pura): se descartan las entradas con un ticker que no estaba en la entrada, con `picks` vacío o con índices fuera de rango; los índices se deduplican y se cortan a 3. La síntesis sólo puede apoyarse en titulares reales y elegidos.
+- **Atribución estricta de cifras** (añadido 2026-10-06): el prompt exige que cada cifra o hecho concreto de `summary` esté en un titular elegido, pero Haiku no siempre lo cumple (NXT: escribió «+165 %» citando sólo el titular del 259 %). Por eso hay comprobación mecánica con `figures(text)`, que extrae las cifras normalizando coma y punto e ignora los años 19xx/20xx. Si una cifra de la síntesis no está en los titulares elegidos y sí en otro del ticker, ese titular se añade como fuente mientras haya hueco (≤ 3). Si no, la síntesis se descarta con un aviso por stderr.
 - **Coste:** unos 50 titulares de unos 20 tokens → ~1,5K tokens de entrada → < $0,01 por resumen.
 - **Precio de referencia:** Haiku 4.5 cuesta $1/$5 por 1M tokens, frente a $2/$10 de Sonnet 5.5, es decir, un 50 % menos por token (no un 90 %). Aquí no sustituye a nada: es un coste nuevo y mínimo.
 
@@ -183,7 +184,8 @@ def summarize_news(headlines: dict[str, list[str]], model: str = NEWS_MODEL) -> 
   - sin `effort`, `fallbacks` ni cabecera beta;
   - titulares numerados en la entrada;
   - descarte de ticker desconocido, `picks` vacío o índice fuera de rango;
-  - corte a 3 picks.
+  - corte a 3 picks;
+  - cifra de un titular no elegido → se añade como fuente; cifra sin titular o sin hueco → descartada.
 - `summarize_mdna` acepta `model`, y la cabecera beta va sólo cuando hay `fallbacks`.
 
 - **Poda:**

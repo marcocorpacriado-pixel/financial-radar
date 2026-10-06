@@ -317,12 +317,38 @@ class NewsTest(ApiTestCase):
         self.responses = [news_body([{"ticker": "MSFT", "summary": "Varias.", "picks": [5, 4, 3, 2]}])]
         self.assertEqual(analyst.summarize_news(many)["MSFT"].picks, (5, 4, 3))
 
+    def test_figures(self):
+        self.assertEqual(analyst.figures("Nextil +165% a €32,5 millones en 2026 (Expansión, 01-10)"),
+                         {"165", "32.5", "01", "10"})
+        self.assertEqual(analyst.figures("21.300 millones"), analyst.figures("21,300 millones"))
+
+    def test_figures_must_come_from_shown_headlines(self):
+        nxt = ["Nextil dispara su beneficio un 259% (El Economista, 30-09)",
+               "Nextil alcanza 32,5 millones de euros de ventas (noticierotextil.net, 01-10)",
+               "Nextil eleva un 165% su beneficio neto comparable (democrata.es, 30-09)",
+               "Nextil cae con fuerza tras sus resultados (Bolsamania, 01-10)"]
+        self.responses = [news_body([
+            # Caso real del 2026-10-06: el 165 % sale de un titular no elegido → se añade como fuente.
+            {"ticker": "NXT", "summary": "Nextil duplica ingresos a €32.5M y el beneficio sube un 165% en 2026.", "picks": [0, 1]},
+            {"ticker": "MSFT", "summary": "Microsoft sube un 12% por Copilot.", "picks": [1]},  # 12 no está en ningún titular
+        ])]
+        with patch("sys.stderr", io.StringIO()) as err:
+            out = analyst.summarize_news({"NXT": nxt, **HEADLINES})
+        self.assertIn("Noticias MSFT: síntesis descartada, cifras sin titular mostrado ['12']", err.getvalue())
+        self.assertEqual(out["NXT"].picks, (0, 1, 2))
+        self.assertNotIn("MSFT", out)
+        # Sin hueco para añadir la fuente (ya hay 3 elegidos) → descartada.
+        self.responses = [news_body([{"ticker": "NXT", "summary": "Beneficio +165%.", "picks": [0, 1, 3]}])]
+        with patch("sys.stderr", io.StringIO()):
+            self.assertEqual(analyst.summarize_news({"NXT": nxt}), {})
+
     def test_prompt_material_criteria(self):
         prompt = analyst.NEWS_PROMPT
         for rule in ("Capital allocation", "convertible", "buybacks", "M&A",
                      "Operating or regulatory shocks", "litigation", "tariffs", "strategic contracts",
                      "guidance revisions", "rating changes",
-                     "technical analysis", "automated market recaps", "other companies"):
+                     "technical analysis", "automated market recaps", "other companies",
+                     "Strict attribution", "must appear in one of the picked headlines", "leave the figure out"):
             self.assertIn(rule, prompt)
 
     def test_no_headlines_no_call(self):
