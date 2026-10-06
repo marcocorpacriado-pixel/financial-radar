@@ -2,9 +2,12 @@ import io
 import json
 import math
 import os
+import tempfile
 import unittest
 import urllib.error
 import urllib.parse
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 import quant
@@ -52,6 +55,36 @@ class PureFunctionsTest(unittest.TestCase):
         self.assertIsNone(quant.avg_volume([100] * 30))
         self.assertIsNone(quant.avg_volume([100] * 29 + [None] + [100, 100]))
 
+    def test_cost_of_equity_capm(self):
+        self.assertAlmostEqual(quant.cost_of_equity(0.045, 1.2), 0.105)    # 4.5 % + 1.2 × 5 %
+        for anomalous in (None, 0, -0.3):
+            self.assertIsNone(quant.cost_of_equity(0.045, anomalous), anomalous)  # sin beta neutra asumida
+
+    def test_effective_tax_rate(self):
+        self.assertAlmostEqual(quant.effective_tax_rate(20, 100), 0.2)
+        self.assertEqual(quant.effective_tax_rate(50, 100), 0.35)         # tope
+        self.assertEqual(quant.effective_tax_rate(-5, 100), 0.0)          # crédito fiscal extraordinario
+        self.assertEqual(quant.effective_tax_rate(-5859, -36273), 0.0)    # MSTR: EBT < 0, sin escudo fiscal
+        self.assertEqual(quant.effective_tax_rate(10, 0), 0.0)
+        self.assertEqual(quant.effective_tax_rate(20, 100, exempt=True), 0.0)
+        self.assertEqual(quant.effective_tax_rate(None, None, exempt=True), 0.0)
+        self.assertIsNone(quant.effective_tax_rate(None, 100))
+        self.assertIsNone(quant.effective_tax_rate(20, None))
+
+    def test_cost_of_debt(self):
+        self.assertAlmostEqual(quant.cost_of_debt(10, 200), 0.05)
+        self.assertEqual(quant.cost_of_debt(0, 200), 0)
+        for args in ((None, 200), (10, None), (-1, 200)):
+            self.assertIsNone(quant.cost_of_debt(*args), args)
+
+    def test_cash_cycle(self):
+        self.assertEqual(quant.cash_cycle(40, 30, 50, 999), 20)       # se calcula, no se copia el de FMP
+        self.assertEqual(quant.cash_cycle(90, None, 80, None), 10)    # sin inventario: DSO - DPO
+        self.assertEqual(quant.cash_cycle(90, 0, 80, None), 10)
+        self.assertEqual(quant.cash_cycle(None, 5, 80, 12.5), 12.5)   # sin DSO: el de FMP
+        self.assertIsNone(quant.cash_cycle(90, 5, None, None))
+        self.assertIsNone(quant.cash_cycle(0, 0, 233.26, -233.26))    # BABA: DSO 0 = no reportado, ni el de FMP
+
 
 # --- FMP simulado ---------------------------------------------------------
 
@@ -72,21 +105,31 @@ def ratios_ttm(pe, margin):
 
 ROUTES = {
     ("ratios-ttm", "AAA", None): [{"priceToEarningsRatioTTM": 30, "operatingProfitMarginTTM": 0.25,
-                                   "interestCoverageRatioTTM": 12.5, "debtToEquityRatioTTM": 0.8}],
+                                   "interestCoverageRatioTTM": 12.5, "debtToEquityRatioTTM": 0.8,
+                                   "assetTurnoverTTM": 0.75}],
     ("key-metrics-ttm", "AAA", None): [{"evToEBITDATTM": 20, "freeCashFlowYieldTTM": 0.04, "marketCap": 1e12,
                                         "netDebtToEBITDATTM": 1.5, "returnOnInvestedCapitalTTM": 0.18,
-                                        "returnOnEquityTTM": 0.3, "currentRatioTTM": 1.4}],
+                                        "returnOnEquityTTM": 0.3, "currentRatioTTM": 1.4,
+                                        "daysOfSalesOutstandingTTM": 40, "daysOfInventoryOutstandingTTM": 30,
+                                        "daysOfPayablesOutstandingTTM": 50, "cashConversionCycleTTM": 20}],
     ("ratios", "AAA", "annual"): [{"priceToEarningsRatio": v} for v in (20, 25, -5, 24, None)],
     ("key-metrics", "AAA", "annual"): [{"evToEBITDA": v} for v in (25, 25, 30, 0, 20)],
     ("income-statement", "AAA", "quarter"): [
-        {"revenue": r, "operatingIncome": oi, "period": p, "fiscalYear": y}
-        for r, oi, p, y in [(120, 30, "Q3", "2026"), (110, 25, "Q2", "2026"), (105, 20, "Q1", "2026"),
-                            (100, 20, "Q4", "2025"), (100, 22, "Q3", "2025")]
+        {"revenue": r, "operatingIncome": oi, "period": p, "fiscalYear": y, "interestExpense": i,
+         "incomeTaxExpense": 2, "incomeBeforeTax": 10}
+        for r, oi, p, y, i in [(120, 30, "Q3", "2026", 3), (110, 25, "Q2", "2026", 3), (105, 20, "Q1", "2026", 2),
+                               (100, 20, "Q4", "2025", 2), (100, 22, "Q3", "2025", 1)]
     ],
     ("income-statement", "AAA", "annual"): [
-        {"revenue": 500, "operatingIncome": 100, "period": "FY", "fiscalYear": "2025"},
-        {"revenue": 400, "operatingIncome": 70, "period": "FY", "fiscalYear": "2024"},
+        {"revenue": 500, "operatingIncome": 100, "period": "FY", "fiscalYear": "2025", "interestExpense": 8,
+         "incomeTaxExpense": 6, "incomeBeforeTax": 40},
+        {"revenue": 400, "operatingIncome": 70, "period": "FY", "fiscalYear": "2024", "interestExpense": 6,
+         "incomeTaxExpense": 0, "incomeBeforeTax": 30},
     ],
+    ("balance-sheet-statement", "AAA", "quarter"): [{"totalDebt": 200}],
+    ("balance-sheet-statement", "AAA", "annual"): [{"totalDebt": 160}],
+    ("profile", "AAA", None): [{"beta": 1.2}],
+    ("treasury-rates", None, None): [{"date": "2026-10-01", "year10": 5.24}, {"date": "2026-10-02", "year10": 5.28}],
     ("historical-price-eod/light", "AAA", None): eod(last_volume=250, prev_volume=100),
     ("stock-peers", "AAA", None): [{"symbol": s} for s in ("AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG")],
     ("ratios-ttm", "BBB", None): ratios_ttm(20, 0.20),
@@ -106,7 +149,7 @@ class FakeFMP:
         u = urllib.parse.urlparse(url)
         q = dict(urllib.parse.parse_qsl(u.query))
         assert q["apikey"] == KEY and timeout == 10
-        key = (u.path.removeprefix("/stable/"), q["symbol"], q.get("period"))
+        key = (u.path.removeprefix("/stable/"), q.get("symbol"), q.get("period"))
         self.calls.append(key)
         payload = self.routes[key]
         if callable(payload):
@@ -119,9 +162,14 @@ class FMPTestCase(unittest.TestCase):
 
     def setUp(self):
         quant.fetch.cache_clear()
+        quant.risk_free_rate.cache_clear()
         quant.calls_made = 0
         self.fmp = FakeFMP(dict(self.routes))
-        for p in (patch.dict(os.environ, {"FMP_API_KEY": KEY}), patch("quant.urllib.request.urlopen", self.fmp)):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.rf_cache = Path(tmp.name, "cache", "treasury.json")
+        for p in (patch.dict(os.environ, {"FMP_API_KEY": KEY}), patch("quant.urllib.request.urlopen", self.fmp),
+                  patch("quant.RF_CACHE", self.rf_cache)):
             p.start()
             self.addCleanup(p.stop)
 
@@ -151,7 +199,79 @@ class AnalyzeTest(FMPTestCase):
         self.assertAlmostEqual(r.margin_vs_peers, 0.075)
         self.assertNotIn(("ratios-ttm", "GGG", None), self.fmp.calls)
         self.assertEqual(quant.calls_made, len(self.fmp.calls))
-        self.assertLessEqual(quant.calls_made, 12)
+        self.assertLessEqual(quant.calls_made, 15)  # 9 propias (incl. treasury, 1 por ejecución) + stock-peers + 5 peers
+
+    def test_capital_cost_and_cash_cycle(self):
+        r = quant.analyze("AAA", [])
+        m = r.metrics
+        self.assertEqual((m.beta, m.asset_turnover, m.dso, m.dio, m.dpo, m.cash_conversion_cycle), (1.2, 0.75, 40, 30, 50, 20))
+        self.assertAlmostEqual(r.risk_free_rate, 0.0528)          # year10 de la fecha más reciente, en fracción
+        self.assertAlmostEqual(r.cost_of_equity, 0.1128)          # 5.28 % + 1.2 × 5 %
+        self.assertAlmostEqual(r.roe_spread, 0.1872)              # 30 % - 11.28 %
+        self.assertAlmostEqual(r.cost_of_debt, 0.05)              # (3 + 3 + 2 + 2) / 200
+        self.assertAlmostEqual(r.tax_rate, 0.2)                   # (2 × 4) / (10 × 4)
+        self.assertAlmostEqual(r.cost_of_debt_after_tax, 0.04)    # 5 % × (1 - 20 %)
+
+    def test_tax_exempt_keeps_gross_rd(self):
+        r = quant.analyze("AAA", [], tax_exempt=True)
+        self.assertEqual(r.tax_rate, 0.0)
+        self.assertAlmostEqual(r.cost_of_debt_after_tax, 0.05)
+
+    def test_loss_before_tax_has_no_shield(self):
+        key = ("income-statement", "AAA", "quarter")
+        self.fmp.routes[key] = [{**row, "incomeTaxExpense": -1, "incomeBeforeTax": -10} for row in ROUTES[key]]
+        r = quant.analyze("AAA", [])
+        self.assertEqual(r.tax_rate, 0.0)
+        self.assertAlmostEqual(r.cost_of_debt_after_tax, r.cost_of_debt)
+
+    def test_no_inventory_null_beta_and_missing_interest(self):
+        key = ("key-metrics-ttm", "AAA", None)
+        self.fmp.routes[key] = [{**ROUTES[key][0], "daysOfInventoryOutstandingTTM": None,
+                                 "cashConversionCycleTTM": None, "returnOnEquityTTM": None}]
+        self.fmp.routes[("profile", "AAA", None)] = [{"beta": None}]
+        key = ("income-statement", "AAA", "quarter")
+        self.fmp.routes[key] = [{**row, "interestExpense": None} for row in ROUTES[key]]
+        r = quant.analyze("AAA", [])
+        self.assertEqual((r.metrics.dio, r.metrics.cash_conversion_cycle), (None, -10))  # 40 - 50
+        self.assertEqual((r.metrics.beta, r.cost_of_equity), (None, None))              # sin beta: k n/d
+        self.assertEqual((r.roe_spread, r.cost_of_debt, r.cost_of_debt_after_tax), (None, None, None))
+        self.assertAlmostEqual(r.tax_rate, 0.2)                                          # t no depende de los intereses
+
+
+class RiskFreeRateTest(FMPTestCase):
+    def write_cache(self, rf, age):
+        self.rf_cache.parent.mkdir(parents=True)
+        self.rf_cache.write_text(json.dumps({"fetched": (datetime.now(timezone.utc) - age).isoformat(), "rf": rf}))
+
+    def test_fetches_and_caches(self):
+        self.assertAlmostEqual(quant.risk_free_rate(), 0.0528)
+        self.assertAlmostEqual(json.loads(self.rf_cache.read_text())["rf"], 0.0528)
+        self.assertEqual(self.fmp.calls, [("treasury-rates", None, None)])
+
+    def test_fresh_cache_skips_fmp(self):
+        self.write_cache(0.045, timedelta(hours=23))
+        self.assertEqual(quant.risk_free_rate(), 0.045)
+        self.assertEqual(self.fmp.calls, [])
+
+    def test_stale_or_corrupt_cache_refetches(self):
+        self.write_cache(0.045, timedelta(hours=25))
+        self.assertAlmostEqual(quant.risk_free_rate(), 0.0528)
+        quant.risk_free_rate.cache_clear()
+        self.rf_cache.write_text("{no json")
+        self.assertAlmostEqual(quant.risk_free_rate(), 0.0528)
+
+    def test_failure_falls_back_without_caching(self):
+        for payload in (http_error(500, b"<html>"), [], [{"date": "2026-10-02", "year10": None}]):
+            quant.fetch.cache_clear()
+            quant.risk_free_rate.cache_clear()
+            self.fmp.routes[("treasury-rates", None, None)] = payload
+            with patch("sys.stderr", io.StringIO()):
+                self.assertEqual(quant.risk_free_rate(), 0.04, payload)
+            self.assertFalse(self.rf_cache.exists())
+
+    def test_no_api_key_falls_back(self):
+        with patch.dict(os.environ, {}, clear=True), patch("sys.stderr", io.StringIO()):
+            self.assertEqual(quant.risk_free_rate(), 0.04)
 
     def test_config_peers_skip_stock_peers(self):
         r = quant.analyze("AAA", ["bbb", "AAA", "ccc", "GGG"])
@@ -185,7 +305,7 @@ class BalanceTest(FMPTestCase):
         m = quant.analyze("AAA", []).metrics
         self.assertEqual((m.net_debt_to_ebitda, m.net_cash, m.debt_to_equity), (1.5, False, 0.8))
         self.assertEqual((m.interest_coverage, m.roic, m.roe, m.current_ratio), (12.5, 0.18, 0.3, 1.4))
-        self.assertLessEqual(quant.calls_made, 6)  # mismos payloads: ninguna llamada extra
+        self.assertLessEqual(quant.calls_made, 9)  # 6 + balance + profile + treasury
 
     def test_net_cash(self):
         self.set_ttm(metrics={"netDebtToEBITDATTM": -0.8})  # EBITDA > 0 (EV/EBITDA = 20)
@@ -215,14 +335,19 @@ class BalanceTest(FMPTestCase):
 
 class FallbackTest(FMPTestCase):
     def assert_fy_fallback(self):
-        m = quant.analyze("AAA", []).metrics
+        r = quant.analyze("AAA", [])
+        m = r.metrics
         self.assertAlmostEqual(m.operating_margin_last, 0.2)   # 100 / 500
         self.assertAlmostEqual(m.revenue_growth_yoy, 0.25)     # 500 / 400 - 1
         self.assertEqual(m.last_period, "FY2025")
+        return r
 
     def test_quarter_403_falls_back_to_fy(self):
         self.fmp.routes[("income-statement", "AAA", "quarter")] = http_error(403)
-        self.assert_fy_fallback()
+        self.fmp.routes[("balance-sheet-statement", "AAA", "quarter")] = http_error(403)
+        r = self.assert_fy_fallback()
+        self.assertAlmostEqual(r.cost_of_debt, 0.05)  # 8 (FY) / 160 (FY)
+        self.assertAlmostEqual(r.tax_rate, 0.15)      # 6 / 40 (FY)
 
     def test_quarter_402_falls_back_to_fy(self):
         self.fmp.routes[("income-statement", "AAA", "quarter")] = http_error(402)

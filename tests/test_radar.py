@@ -4,7 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -32,7 +32,12 @@ def report(symbol="MSFT", **values):
 FULL = dict(price=512.3, pe_ttm=34.1, ev_ebitda_ttm=22.0, operating_margin_ttm=0.452, revenue_growth_yoy=0.15,
             last_period="FY2026 Q4", fcf_yield=0.021, net_debt_to_ebitda=0.52, debt_to_equity=0.29,
             interest_coverage=50.88, roic=0.2056, roe=0.3321, current_ratio=1.23, pe_vs_hist=0.12, pe_vs_peers=0.08,
-            ev_ebitda_vs_hist=0.05, margin_vs_peers=0.061, volume_divergence=-0.12)
+            ev_ebitda_vs_hist=0.05, margin_vs_peers=0.061, volume_divergence=-0.12,
+            asset_turnover=0.4376, dso=88.96, dio=4.79, dpo=145.54, cash_conversion_cycle=-51.79,
+            cost_of_equity=0.1077, roe_spread=0.2244, cost_of_debt=0.0237, tax_rate=0.194, cost_of_debt_after_tax=0.0191)
+EFFICIENCY = ("Eficiencia: ROE 33.2% (spread +22.4 pp vs k=10.8%, crea valor) · ROIC 20.6% · Rot. 0.44x · "
+              "CCC -52d (DSO 89d | DIO 5d | DPO 146d)")
+SOLVENCY = "Solvencia: Deuda Neta/EBITDA 0.5x · D/E 0.29 · rd 2.4% (neto 1.9%, t=19.4%) · Cobertura 50.9x · Liq. 1.23"
 
 
 def filing(accession, form="10-Q", filed="2026-07-29", period="2026-06-30"):
@@ -66,6 +71,8 @@ class PortfolioTest(unittest.TestCase):
                      '[[positions]]\nticker = "A"\n[[positions]]\nticker = "A"\n',       # duplicado
                      '[[positions]]\nticker = "A"\npeers = "B"\n',                       # tipo
                      '[[positions]]\nticker = "A"\nsec_enabled = "no"\n',                # tipo
+                     '[[positions]]\nticker = "A"\ndistorted_metrics = 1\n',            # tipo
+                     '[[positions]]\nticker = "A"\ntax_exempt = "yes"\n',               # tipo
                      'summary_every_days = 0\n[[positions]]\nticker = "A"\n',
                      'summary_every_days = 12\n',                                        # sin posiciones
                      'otra = 1\n[[positions]]\nticker = "A"\n',
@@ -85,6 +92,12 @@ class PortfolioTest(unittest.TestCase):
             "ESEA": (("DAC", "GSL", "ZIM"), False),
             "BABA": (("JD", "PDD", "BIDU", "TCEHY"), False),
         })
+        self.assertEqual({p.ticker for p in cfg.positions if p.distorted_metrics}, {"MSTR"})
+        self.assertEqual({p.ticker for p in cfg.positions if p.tax_exempt}, {"ESEA"})
+
+    def test_flags(self):
+        cfg = self.load('[[positions]]\nticker = "X"\ndistorted_metrics = true\ntax_exempt = true\nsec_enabled = false\n')
+        self.assertEqual(cfg.positions, [radar.Position("X", "X", "X", (), False, True, True)])
 
 
 # --- Estado, periodicidad y formato ---------------------------------------
@@ -117,7 +130,8 @@ class FormatTest(unittest.TestCase):
             "MSFT 512.30 · volumen -12% vs media 30 sesiones",
             "Val: P/E 34.1 (hist +12%, pares +8%) · EV/EBITDA 22.0 (hist +5%)",
             "Op: margen 45.2% (pares +6.1 pp) · ingresos +15% YoY (FY2026 Q4) · FCF yield 2.1%",
-            "Balance: deuda neta/EBITDA 0.5x · D/E 0.29 · cobertura int. 50.9x · ROIC 20.6% · ROE 33.2% · liquidez 1.23",
+            EFFICIENCY,
+            SOLVENCY,
         ])
 
     def test_missing_values(self):
@@ -125,22 +139,46 @@ class FormatTest(unittest.TestCase):
             "MSTR n/d · volumen n/d vs media 30 sesiones",
             "Val: P/E n/d (hist n/d, pares n/d) · EV/EBITDA n/d (hist n/d)",
             "Op: margen n/d (pares n/d) · ingresos n/d · FCF yield n/d",
-            "Balance: deuda neta/EBITDA n/d · D/E n/d · cobertura int. n/d · ROIC n/d · ROE n/d · liquidez n/d",
+            "Eficiencia: ROE n/d (spread n/d vs k=n/d) · ROIC n/d · Rot. n/d · CCC n/d (DSO n/d | DIO n/d | DPO n/d)",
+            "Solvencia: Deuda Neta/EBITDA n/d · D/E n/d · rd n/d (neto n/d, t=n/d) · Cobertura n/d · Liq. n/d",
         ])
 
     def test_net_cash_negative_coverage_and_fy(self):
         lines = radar.format_quant(report(net_cash=True, interest_coverage=-262.854, roic=-0.134,
                                           revenue_growth_yoy=-0.05, last_period="FY2025"), "X")
         self.assertIn("ingresos -5% YoY (FY2025)", lines[2])
-        self.assertTrue(lines[3].startswith("Balance: deuda neta/EBITDA caja neta · D/E n/d · cobertura int. -262.9x · ROIC -13.4%"))
+        self.assertIn("ROIC -13.4%", lines[3])
+        self.assertTrue(lines[4].startswith("Solvencia: Deuda Neta/EBITDA caja neta · D/E n/d · rd n/d (neto n/d, t=n/d) · Cobertura -262.9x"))
+
+    def test_value_destruction_and_no_inventory(self):
+        lines = radar.format_quant(report(roe=0.06, cost_of_equity=0.105, roe_spread=-0.045,
+                                          dso=90.66, dio=0.0, dpo=79.89, cash_conversion_cycle=10.77), "X")
+        self.assertTrue(lines[3].startswith("Eficiencia: ROE 6.0% (spread -4.5 pp vs k=10.5%, destruye valor)"))
+        self.assertTrue(lines[3].endswith("CCC 11d (DSO 91d | DIO 0d | DPO 80d)"))
+
+    def test_unreported_dso(self):
+        # BABA real: FMP da DSO 0 y un CCC de -233d; quant deja el CCC en None.
+        lines = radar.format_quant(report(dso=0.0, dio=0.0, dpo=233.26), "BABA")
+        self.assertTrue(lines[3].endswith("CCC n/d (DSO no reportado | DIO 0d | DPO 233d)"))
 
     def test_distorted_operating_margin(self):
         # MSTR real: margen -16.77 (-1677 %) por el mark-to-market del bitcoin.
         lines = radar.format_quant(report(operating_margin_ttm=-16.767, margin_vs_peers=-16.877, revenue_growth_yoy=0.07,
                                           last_period="FY2026 Q2", fcf_yield=-0.411), "MSTR")
-        self.assertEqual(lines[2], "Op: ⚠️ margen -1676.7%: métricas operativas distorsionadas (típico del mark-to-market "
-                                   "de activos digitales); sin comparación con pares · ingresos +7% YoY (FY2026 Q2) · FCF yield -41.1%")
+        self.assertEqual(lines[2], "Op: ⚠️ margen -1676.7%: distorsionado (|margen| > 500 %); sin comparación con pares · "
+                                   "ingresos +7% YoY (FY2026 Q2) · FCF yield -41.1%")
         self.assertIn("pares +500.0 pp", radar.format_quant(report(operating_margin_ttm=5.0, margin_vs_peers=5.0), "X")[2])
+
+    def test_distorted_metrics_flag(self):
+        # Con el flag de portfolio.toml se marca aunque el margen no pase del 500 %.
+        lines = radar.format_quant(report(operating_margin_ttm=0.12, margin_vs_peers=-0.05, roe=-0.608,
+                                          cost_of_equity=0.2328, roe_spread=-0.8408), "MSTR", distorted_metrics=True)
+        self.assertTrue(lines[2].startswith("Op: ⚠️ margen 12.0%: no representativo por tesorería en activos digitales; "
+                                            "sin comparación con pares · "))
+        self.assertTrue(lines[3].startswith("Eficiencia: ROE -60.8% (spread -84.1 pp vs k=23.3% ⚠️ no representativo "
+                                            "por tesorería en activos digitales) · "))
+        self.assertNotIn("destruye valor", lines[3])
+        self.assertNotIn("⚠️", "".join(radar.format_quant(report(operating_margin_ttm=0.12, roe_spread=-0.1), "X")))
 
     def test_summary_block_html(self):
         lines = radar.format_quant(report(**FULL), "MSFT") + ["Filing: 10-K 2026-07-29 · Riesgo/Cat.: Costes <altos> & deuda"]
@@ -148,7 +186,8 @@ class FormatTest(unittest.TestCase):
             "🔹 <b>MSFT</b> 512.30 · volumen -12% vs media 30 sesiones",
             "• <b>Val:</b> P/E 34.1 (hist +12%, pares +8%) · EV/EBITDA 22.0 (hist +5%)",
             "• <b>Op:</b> margen 45.2% (pares +6.1 pp) · ingresos +15% YoY (FY2026 Q4) · FCF yield 2.1%",
-            "• <b>Balance:</b> deuda neta/EBITDA 0.5x · D/E 0.29 · cobertura int. 50.9x · ROIC 20.6% · ROE 33.2% · liquidez 1.23",
+            "• <b>Eficiencia:</b> " + EFFICIENCY.removeprefix("Eficiencia: "),
+            "• <b>Solvencia:</b> " + SOLVENCY.removeprefix("Solvencia: "),
             "• <b>Filing:</b> 10-K 2026-07-29 · Riesgo/Cat.: Costes &lt;altos&gt; &amp; deuda",
         ])
 
@@ -164,7 +203,7 @@ class RunTestCase(unittest.TestCase):
                         ("MSFT", "10-Q"): [filing("Q2")]}
         self.reports = {"MSFT": report("MSFT", **FULL), "ESEA": report("ESEA", **FULL)}
         self.analysis = analysis()
-        self.metrics_seen, self.models_seen = [], []
+        self.metrics_seen, self.models_seen, self.tax_exempt_seen = [], [], {}
         self.news = {}              # ticker -> lista de Headline o excepción
         self.digests = {}           # resultado de summarize_news o excepción
         self.news_calls = []
@@ -181,7 +220,8 @@ class RunTestCase(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def fake_quant(self, symbol, peers):
+    def fake_quant(self, symbol, peers, tax_exempt=False):
+        self.tax_exempt_seen[symbol] = tax_exempt
         r = self.reports[symbol]
         if isinstance(r, Exception):
             raise r
@@ -234,7 +274,8 @@ class AlertTest(RunTestCase):
         self.assertEqual(lines[0], "Nuevo 10-Q · MSFT · periodo 2026-06-30 (presentado 2026-07-29)")
         self.assertIn("Guidance: Eleva la previsión de ingresos de Azure.", lines)
         self.assertEqual(lines[-1], "https://sec.example/Q2.htm")
-        self.assertIn("Balance: deuda neta/EBITDA 0.5x · D/E 0.29 · cobertura int. 50.9x", self.metrics_seen[0])
+        self.assertIn(SOLVENCY, self.metrics_seen[0])
+        self.assertIn(EFFICIENCY, self.metrics_seen[0])
         self.assertNotIn("<b>", self.metrics_seen[0])  # Claude recibe las métricas en texto plano
         state = self.saved()
         self.assertEqual(state["tickers"]["MSFT"]["accessions"]["10-Q"], "Q2")
@@ -307,6 +348,13 @@ class SummaryTest(RunTestCase):
         text = self.send.call_args.args[0]
         self.assertIn("🔹 <b>MSFT</b> 512.30", text)
         self.assertIn("🔹 <b>ESEA</b>: sin datos FMP (FMP ratios-ttm: HTTP 402)", text)
+
+    def test_position_flags_reach_quant_and_format(self):
+        positions = (replace(MSFT, distorted_metrics=True), replace(ESEA, tax_exempt=True))
+        self.run_radar(self.known_state(q="Q2"), positions=positions, force_summary=True)
+        self.assertEqual(self.tax_exempt_seen, {"MSFT": False, "ESEA": True})
+        text = self.send.call_args.args[0]
+        self.assertEqual(text.count("no representativo por tesorería en activos digitales"), 2)  # sólo MSFT: Op y Eficiencia
 
     def test_catalyst_fallback_text(self):
         self.analysis = analysis(catalyst=None)

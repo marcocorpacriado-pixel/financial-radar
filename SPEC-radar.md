@@ -35,6 +35,8 @@ ticker_fmp = "MSTR"       # opcional, por defecto = ticker
 ticker_sec = "MSTR"       # opcional, por defecto = ticker
 peers = ["COIN", "PLTR", "MARA"]   # opcional, por defecto []
 sec_enabled = true        # opcional, por defecto true
+distorted_metrics = true  # opcional, por defecto false: margen, ROE y spread no representativos (añadido 2026-10-06)
+tax_exempt = false        # opcional, por defecto false: t = 0 en el coste neto de la deuda (ESEA, régimen de tonelaje)
 ```
 
 - Se lee con `tomllib`.
@@ -93,17 +95,20 @@ sec_enabled = true        # opcional, por defecto true
 🔹 <b>MSFT</b> 517.53 · volumen -18% vs media 30 sesiones
 • <b>Val:</b> P/E 28.8 (hist -18%, pares +37%) · EV/EBITDA 19.0 (hist -19%)
 • <b>Op:</b> margen 46.8% (pares +14.0 pp) · ingresos +18% YoY (FY2026 Q4) · FCF yield 1.7%
-• <b>Balance:</b> deuda neta/EBITDA 0.5x · D/E 0.29 · cobertura int. 50.9x · ROIC 20.6% · ROE 33.2% · liquidez 1.23
+• <b>Eficiencia:</b> ROE 33.2% (spread +22.4 pp vs k=10.8%, crea valor) · ROIC 20.6% · Rot. 0.44x · CCC -52d (DSO 89d | DIO 5d | DPO 146d)
+• <b>Solvencia:</b> Deuda Neta/EBITDA 0.5x · D/E 0.29 · rd 2.4% (neto 1.9%, t=19.4%) · Cobertura 50.9x · Liq. 1.23
 • <b>Filing:</b> 10-K 2026-07-29 · Riesgo/Cat.: …   (sin ⚠️: a menudo es un catalizador positivo)
 💡 <b>Noticias:</b> Microsoft lanzó Copilot rediseñado…
    ◦ CNBC, 25-09: Microsoft gives Copilot a much-needed overhaul, and the stock deservedly soars
 ```
-- `format_quant` devuelve las mismas líneas **en texto plano**, con las etiquetas `Val:`, `Op:` y `Balance:`. Ese texto es el que recibe `analyst` como `<financial_metrics>`; las negritas y los emojis se añaden sólo al componer el mensaje.
+- `format_quant` devuelve las mismas líneas **en texto plano**, con las etiquetas `Val:`, `Op:`, `Eficiencia:` y `Solvencia:` (revisado el 2026-10-06; antes una sola línea `Balance:`). Ese texto es el que recibe `analyst` como `<financial_metrics>`; las negritas y los emojis se añaden sólo al componer el mensaje.
 - **El bloque de noticias cierra cada posición**, también las que tienen `sec_enabled = false` (ESEA, BABA), que no tienen línea de filing.
-- **Métricas operativas distorsionadas:** si `|margen operativo TTM| > 500 %`, la línea `Op:` muestra `⚠️ margen -1676.7%: métricas operativas distorsionadas (típico del mark-to-market de activos digitales); sin comparación con pares`.
+- **Métricas distorsionadas (revisado el 2026-10-06):** con `distorted_metrics = true` (MSTR), la línea `Op:` muestra `⚠️ margen -1676.7%: no representativo por tesorería en activos digitales; sin comparación con pares` y el spread del ROE sobre k lleva `⚠️ no representativo por tesorería en activos digitales` en vez de `crea/destruye valor`. Es fijo: no depende del margen del trimestre.
+  - Red de seguridad para posiciones sin el flag: si `|margen operativo TTM| > 500 %` (`DISTORTED_MARGIN = 5.0`), el mismo tratamiento con el texto neutro `distorsionado (|margen| > 500 %)`.
   - Se omite la diferencia frente a pares, porque no significa nada en ese caso.
   - Crecimiento y FCF yield se mantienen.
-  - El umbral es genérico (`DISTORTED_MARGIN = 5.0`), no exclusivo de MSTR.
+- **Ciclo de caja:** `DSO 0` es un dato no reportado (BABA): se muestra `CCC n/d (DSO no reportado | DIO 0d | DPO 233d)`.
+- **Solvencia:** `rd X% (neto Y%, t=Z%)`: coste bruto de la deuda, neto del escudo fiscal y tipo efectivo aplicado.
 - **Etiqueta de periodo:** `FY2026 Q4` (trimestre del **ejercicio fiscal** de la empresa: MSFT cierra en junio y BABA en marzo) o `FY2025` si hubo fallback anual.
 - **Alertas de filings** siguen en texto plano: su contenido es el render de `analyst`.
 - Valor ausente → `n/d`. Caja neta → `deuda neta/EBITDA caja neta`. El precio va sin símbolo de divisa.

@@ -21,9 +21,9 @@ PORTFOLIO = Path("portfolio.toml")
 STATE = Path("state.json")
 FORMS = ("10-K", "10-Q")
 SENT_TTL = timedelta(days=180)
-DISTORTED_MARGIN = 5.0  # |margen operativo| > 500 %: típico del mark-to-market de activos digitales (MSTR)
-_LABELS = ("Val", "Op", "Balance", "Filing")
-_POSITION_KEYS = {"ticker", "ticker_fmp", "ticker_sec", "peers", "sec_enabled"}
+DISTORTED_MARGIN = 5.0  # |margen operativo| > 500 %: red de seguridad para posiciones sin distorted_metrics
+_LABELS = ("Val", "Op", "Eficiencia", "Solvencia", "Filing")
+_POSITION_KEYS = {"ticker", "ticker_fmp", "ticker_sec", "peers", "sec_enabled", "distorted_metrics", "tax_exempt"}
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,8 @@ class Position:
     ticker_sec: str
     peers: tuple[str, ...]
     sec_enabled: bool
+    distorted_metrics: bool = False  # tesorería en activos digitales (MSTR): margen, ROE y spread no representativos
+    tax_exempt: bool = False         # régimen de tonelaje (navieras): t = 0 en el coste neto de la deuda
 
 
 @dataclass(frozen=True)
@@ -68,12 +70,12 @@ def load_portfolio(path: Path = PORTFOLIO) -> Config:
         if any(p.ticker == ticker for p in positions):
             raise ValueError(f"{where}: ticker {ticker} duplicado")
         fmp, sec = raw.get("ticker_fmp", ticker), raw.get("ticker_sec", ticker)
-        peers, enabled = raw.get("peers", []), raw.get("sec_enabled", True)
-        if not (isinstance(fmp, str) and isinstance(sec, str) and isinstance(enabled, bool)
+        peers, flags = raw.get("peers", []), [raw.get(k, k == "sec_enabled") for k in ("sec_enabled", "distorted_metrics", "tax_exempt")]
+        if not (isinstance(fmp, str) and isinstance(sec, str) and all(isinstance(f, bool) for f in flags)
                 and isinstance(peers, list) and all(isinstance(p, str) for p in peers)):
             raise ValueError(f"{where}: ticker_fmp/ticker_sec deben ser texto, peers una lista de textos "
-                             "y sec_enabled true/false")
-        positions.append(Position(ticker, fmp, sec, tuple(peers), enabled))
+                             "y sec_enabled/distorted_metrics/tax_exempt true/false")
+        positions.append(Position(ticker, fmp, sec, tuple(peers), *flags))
     if not positions:
         raise ValueError(f"{path}: no hay posiciones")
     return Config(days, *models, positions)
@@ -124,14 +126,26 @@ def _pp(x: float | None) -> str:
     return "n/d" if x is None else f"{x * 100:+.1f} pp"
 
 
-def format_quant(report: quant.Report, ticker: str) -> list[str]:
+def format_quant(report: quant.Report, ticker: str, distorted_metrics: bool = False) -> list[str]:
     """Bloque de métricas: lo muestra el resumen y lo recibe analyst como <financial_metrics>."""
     m, r = report.metrics, report
     growth = "n/d" if m.revenue_growth_yoy is None else f"{_delta(m.revenue_growth_yoy)} YoY ({m.last_period})"
     leverage = "caja neta" if m.net_cash else _n(m.net_debt_to_ebitda, suffix="x")
-    if m.operating_margin_ttm is not None and abs(m.operating_margin_ttm) > DISTORTED_MARGIN:
-        margin = (f"⚠️ margen {_pct(m.operating_margin_ttm)}: métricas operativas distorsionadas "
-                  "(típico del mark-to-market de activos digitales); sin comparación con pares")
+    if distorted_metrics:
+        note = "no representativo por tesorería en activos digitales"
+    elif m.operating_margin_ttm is not None and abs(m.operating_margin_ttm) > DISTORTED_MARGIN:
+        note = "distorsionado (|margen| > 500 %)"
+    else:
+        note = None
+    if note:
+        value = f" ⚠️ {note}"
+    elif r.roe_spread is None:
+        value = ""
+    else:
+        value = ", crea valor" if r.roe_spread > 0 else ", destruye valor"
+    dso = "DSO no reportado" if m.dso == 0 else f"DSO {_n(m.dso, 0, 'd')}"  # quant deja el CCC en None
+    if note:
+        margin = f"⚠️ margen {_pct(m.operating_margin_ttm)}: {note}; sin comparación con pares"
     else:
         margin = f"margen {_pct(m.operating_margin_ttm)} (pares {_pp(r.margin_vs_peers)})"
     return [
@@ -139,9 +153,12 @@ def format_quant(report: quant.Report, ticker: str) -> list[str]:
         f"Val: P/E {_n(m.pe_ttm)} (hist {_delta(r.pe_vs_hist)}, pares {_delta(r.pe_vs_peers)}) · "
         f"EV/EBITDA {_n(m.ev_ebitda_ttm)} (hist {_delta(r.ev_ebitda_vs_hist)})",
         f"Op: {margin} · ingresos {growth} · FCF yield {_pct(m.fcf_yield)}",
-        f"Balance: deuda neta/EBITDA {leverage} · D/E {_n(m.debt_to_equity, 2)} · "
-        f"cobertura int. {_n(m.interest_coverage, suffix='x')} · ROIC {_pct(m.roic)} · ROE {_pct(m.roe)} · "
-        f"liquidez {_n(m.current_ratio, 2)}",
+        f"Eficiencia: ROE {_pct(m.roe)} (spread {_pp(r.roe_spread)} vs k={_pct(r.cost_of_equity)}{value}) · "
+        f"ROIC {_pct(m.roic)} · Rot. {_n(m.asset_turnover, 2, 'x')} · CCC {_n(m.cash_conversion_cycle, 0, 'd')} "
+        f"({dso} | DIO {_n(m.dio, 0, 'd')} | DPO {_n(m.dpo, 0, 'd')})",
+        f"Solvencia: Deuda Neta/EBITDA {leverage} · D/E {_n(m.debt_to_equity, 2)} · "
+        f"rd {_pct(r.cost_of_debt)} (neto {_pct(r.cost_of_debt_after_tax)}, t={_pct(r.tax_rate)}) · Cobertura {_n(m.interest_coverage, suffix='x')} · "
+        f"Liq. {_n(m.current_ratio, 2)}",
     ]
 
 
@@ -211,7 +228,8 @@ def run(positions: list[Position], days: int, state: dict, now: datetime, *,
         state["sent"][digest] = now.isoformat()
 
     def metrics(pos):
-        return format_quant(quant.analyze(pos.ticker_fmp, list(pos.peers)), pos.ticker)
+        return format_quant(quant.analyze(pos.ticker_fmp, list(pos.peers), tax_exempt=pos.tax_exempt),
+                            pos.ticker, pos.distorted_metrics)
 
     def analyze_filing(pos, filing, metrics_text):
         current, previous = sec_mdna.fetch_mdna(pos.ticker_sec, filing.form)

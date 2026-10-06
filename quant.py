@@ -10,10 +10,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 BASE = "https://financialmodelingprep.com/stable/"
 MAX_PEERS, MIN_PEERS, HIST_YEARS = 5, 3, 5
 calls_made = 0
+RF_FALLBACK = 0.04  # sin FMP: bono a 10 años aproximado
+ERP = 0.05          # prima de riesgo de mercado, constante conservadora
+MAX_TAX_RATE = 0.35  # tope de t: neutraliza créditos fiscales extraordinarios y anomalías contables
+RF_CACHE, RF_TTL = Path("cache/fmp-treasury.json"), datetime.timedelta(hours=24)
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,12 @@ class Metrics:
     roic: float | None
     roe: float | None
     current_ratio: float | None
+    beta: float | None
+    asset_turnover: float | None
+    dso: float | None
+    dio: float | None
+    dpo: float | None
+    cash_conversion_cycle: float | None
 
 
 @dataclass(frozen=True)
@@ -52,6 +63,12 @@ class Report:
     peer_median_operating_margin: float | None
     pe_vs_peers: float | None
     margin_vs_peers: float | None
+    risk_free_rate: float
+    cost_of_equity: float | None
+    roe_spread: float | None
+    cost_of_debt: float | None
+    tax_rate: float | None
+    cost_of_debt_after_tax: float | None
 
 
 class FMPError(RuntimeError):
@@ -97,6 +114,31 @@ def avg_volume(volumes: list[float | None]) -> float | None:
     return statistics.fmean(prev) if len(volumes) >= 31 and len(prev) == 30 else None
 
 
+def cost_of_equity(rf: float, beta: float | None) -> float | None:
+    """CAPM: rf + beta × ERP; None si no hay beta o es <= 0 (anómala): no se asume una beta neutra."""
+    return rf + beta * ERP if beta is not None and beta > 0 else None
+
+
+def cost_of_debt(interest: float | None, debt: float | None) -> float | None:
+    """Intereses / deuda total; None sin deuda o con intereses ausentes o negativos."""
+    return interest / debt if interest is not None and interest >= 0 and debt else None
+
+
+def effective_tax_rate(tax: float | None, ebt: float | None, exempt: bool = False) -> float | None:
+    """t para el escudo fiscal: 0 si exenta o con EBT <= 0 (sin beneficio no hay escudo); si no, impuesto/EBT en [0, 0.35]."""
+    if exempt or (ebt is not None and ebt <= 0):
+        return 0.0
+    return min(max(tax / ebt, 0.0), MAX_TAX_RATE) if tax is not None and ebt is not None else None
+
+
+def cash_cycle(dso: float | None, dio: float | None, dpo: float | None, fmp_ccc: float | None) -> float | None:
+    """DSO + DIO - DPO; sin inventario (DIO None o 0) = DSO - DPO. Sin DSO o DPO, el CCC de FMP.
+    DSO = 0 es un dato no reportado (BABA), no cobro al contado: CCC None."""
+    if dso == 0:
+        return None
+    return dso + (dio or 0) - dpo if dso is not None and dpo is not None else fmp_ccc
+
+
 # --- FMP ------------------------------------------------------------------
 
 @functools.cache
@@ -135,29 +177,70 @@ def _first(data) -> dict:
     return rows[0] if rows else {}
 
 
-def _last_period(symbol: str) -> tuple[float | None, float | None, str | None]:
-    """(margen operativo, crecimiento YoY, etiqueta) del último trimestre; FY si no hay trimestral."""
+def _statement(path: str, symbol: str, limit: int) -> tuple[list[dict], bool]:
+    """(filas, trimestral): trimestral si el plan lo da (no 402/403) y no viene vacío; si no, anual."""
     try:
-        rows, lag = _rows(fetch("income-statement", symbol=symbol, period="quarter", limit=5)), 4
+        if rows := _rows(fetch(path, symbol=symbol, period="quarter", limit=limit)):
+            return rows, True
     except FMPError as e:
         if e.status not in (402, 403):
             raise
-        rows = []
+    return _rows(fetch(path, symbol=symbol, period="annual", limit=min(limit, 2))), False
+
+
+TTM_FIELDS = ("interestExpense", "incomeTaxExpense", "incomeBeforeTax")
+
+
+def _last_period(symbol: str) -> tuple[float | None, float | None, str | None, dict[str, float | None]]:
+    """(margen operativo, crecimiento YoY, etiqueta) del último trimestre y sumas TTM de TTM_FIELDS; FY si no hay trimestral."""
+    rows, quarterly = _statement("income-statement", symbol, 5)
+    lag = 4 if quarterly else 1
     if not rows:
-        rows, lag = _rows(fetch("income-statement", symbol=symbol, period="annual", limit=2)), 1
-    if not rows:
-        return None, None, None
+        return None, None, None, dict.fromkeys(TTM_FIELDS)
+    ttm = {}
+    for field in TTM_FIELDS:
+        values = [num(r.get(field)) for r in rows[:lag]]
+        ttm[field] = sum(values) if len(values) == lag and None not in values else None
     revenue, op_income = positive(rows[0].get("revenue")), num(rows[0].get("operatingIncome"))
     margin = op_income / revenue if revenue and op_income is not None else None
     growth = yoy(revenue, num(rows[lag].get("revenue"))) if len(rows) > lag else None
     # Ejercicio fiscal de la empresa (MSFT cierra en junio, BABA en marzo): "FY2026 Q4" o "FY2025".
     period, fiscal_year = rows[0].get("period"), rows[0].get("fiscalYear")
     label = (f"FY{fiscal_year}" if period == "FY" else f"FY{fiscal_year} {period}") if period and fiscal_year else period
-    return margin, growth, label
+    return margin, growth, label, ttm
 
 
-def analyze(symbol: str, peers: list[str] | None = None) -> Report:
-    """Métricas de symbol con contexto histórico y frente a su grupo de pares."""
+@functools.cache
+def risk_free_rate() -> float:
+    """Rendimiento del bono a 10 años (fracción), cacheado 24 h en disco; RF_FALLBACK si FMP falla."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        cached = json.loads(RF_CACHE.read_text(encoding="utf-8"))
+        if now - datetime.datetime.fromisoformat(cached["fetched"]) < RF_TTL and positive(cached["rf"]):
+            return cached["rf"]
+    except (OSError, ValueError, LookupError, TypeError):
+        pass  # caché ausente, caducada o corrupta: se pide a FMP
+    since = (now.date() - datetime.timedelta(days=10)).isoformat()
+    try:
+        rows = _rows(fetch("treasury-rates", **{"from": since}))
+        rf = positive(max(rows, key=lambda r: str(r.get("date"))).get("year10")) if rows else None
+    except RuntimeError as e:
+        print(f"rf: {e}", file=sys.stderr)
+        rf = None
+    if rf is None:
+        print(f"rf no disponible: se usa {RF_FALLBACK:.1%}", file=sys.stderr)
+        return RF_FALLBACK
+    rf /= 100  # FMP lo da en %
+    try:
+        RF_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        RF_CACHE.write_text(json.dumps({"fetched": now.isoformat(), "rf": rf}), encoding="utf-8")
+    except OSError:
+        pass  # sin caché se vuelve a pedir mañana; no es motivo para abortar
+    return rf
+
+
+def analyze(symbol: str, peers: list[str] | None = None, tax_exempt: bool = False) -> Report:
+    """Métricas de symbol con contexto histórico y frente a su grupo de pares. tax_exempt: t = 0 (régimen de tonelaje)."""
     symbol = symbol.upper()
     ttm = _first(fetch("ratios-ttm", symbol=symbol))
     km = _first(fetch("key-metrics-ttm", symbol=symbol))
@@ -165,7 +248,17 @@ def analyze(symbol: str, peers: list[str] | None = None) -> Report:
                      for r in _rows(fetch("ratios", symbol=symbol, period="annual", limit=HIST_YEARS)))
     hist_ev = median(positive(r.get("evToEBITDA"))
                      for r in _rows(fetch("key-metrics", symbol=symbol, period="annual", limit=HIST_YEARS)))
-    margin_last, growth, last_period = _last_period(symbol)
+    margin_last, growth, last_period, pnl_ttm = _last_period(symbol)
+    balance, _ = _statement("balance-sheet-statement", symbol, 1)
+    # totalDebt incluye arrendamientos, igual que interestExpense incluye los intereses del leasing financiero.
+    debt = positive(balance[0].get("totalDebt")) if balance else None
+    beta = num(_first(fetch("profile", symbol=symbol)).get("beta"))
+    rf = risk_free_rate()
+    k = cost_of_equity(rf, beta)
+    rd = cost_of_debt(pnl_ttm["interestExpense"], debt)
+    t = effective_tax_rate(pnl_ttm["incomeTaxExpense"], pnl_ttm["incomeBeforeTax"], tax_exempt)
+    roe = num(km.get("returnOnEquityTTM"))
+    dso, dio, dpo = (num(km.get(f"daysOf{x}OutstandingTTM")) for x in ("Sales", "Inventory", "Payables"))
     since = (datetime.date.today() - datetime.timedelta(days=60)).isoformat()
     prices = sorted(_rows(fetch("historical-price-eod/light", symbol=symbol, **{"from": since})),
                     key=lambda r: str(r.get("date")))
@@ -217,8 +310,14 @@ def analyze(symbol: str, peers: list[str] | None = None) -> Report:
             debt_to_equity=positive(ttm.get("debtToEquityRatioTTM")),
             interest_coverage=num(ttm.get("interestCoverageRatioTTM")),  # negativo = el EBIT no cubre intereses
             roic=num(km.get("returnOnInvestedCapitalTTM")),
-            roe=num(km.get("returnOnEquityTTM")),
+            roe=roe,
             current_ratio=positive(km.get("currentRatioTTM")),
+            beta=beta,
+            asset_turnover=num(ttm.get("assetTurnoverTTM")),
+            dso=dso,
+            dio=dio,
+            dpo=dpo,
+            cash_conversion_cycle=cash_cycle(dso, dio, dpo, num(km.get("cashConversionCycleTTM"))),
         ),
         pe_hist_median=hist_pe,
         ev_ebitda_hist_median=hist_ev,
@@ -230,6 +329,12 @@ def analyze(symbol: str, peers: list[str] | None = None) -> Report:
         peer_median_operating_margin=peer_median_margin,
         pe_vs_peers=relative(pe, peer_median_pe),
         margin_vs_peers=margin_ttm - peer_median_margin if margin_ttm is not None and peer_median_margin is not None else None,
+        risk_free_rate=rf,
+        cost_of_equity=k,
+        roe_spread=roe - k if roe is not None and k is not None else None,
+        cost_of_debt=rd,
+        tax_rate=t,
+        cost_of_debt_after_tax=rd * (1 - t) if rd is not None and t is not None else None,
     )
 
 

@@ -17,7 +17,8 @@ Sólo usa la biblioteca estándar de Python: nada de `requests`, `pandas` ni SDK
 🔹 MSFT 517.53 · volumen -18% vs media 30 sesiones
 • Val: P/E 28.8 (hist -18%, pares +37%) · EV/EBITDA 19.0 (hist -19%)
 • Op: margen 46.8% (pares +14.0 pp) · ingresos +18% YoY (FY2026 Q4) · FCF yield 1.7%
-• Balance: deuda neta/EBITDA 0.5x · D/E 0.29 · cobertura int. 50.9x · ROIC 20.6% · ROE 33.2% · liquidez 1.23
+• Eficiencia: ROE 33.2% (spread +22.4 pp vs k=10.8%, crea valor) · ROIC 20.6% · Rot. 0.44x · CCC -52d (DSO 89d | DIO 5d | DPO 146d)
+• Solvencia: Deuda Neta/EBITDA 0.5x · D/E 0.29 · rd 2.4% (neto 1.9%, t=19.4%) · Cobertura 50.9x · Liq. 1.23
 • Filing: 10-K 2026-07-29 · Riesgo/Cat.: Obligaciones contractuales se disparan a $743.8 mil millones…
 💡 Noticias: Microsoft lanzó Copilot rediseñado, generando rally accionario…
    ◦ CNBC, 25-09: Microsoft gives Copilot a much-needed overhaul, and the stock deservedly soars
@@ -82,6 +83,8 @@ Campos por posición:
 | `ticker_sec` | no | Símbolo en EDGAR, si difiere |
 | `peers` | no | Pares fijados a mano (nunca se usa la lista automática de FMP) |
 | `sec_enabled` | no (por defecto `true`) | `false` para emisores sin 10-K/10-Q |
+| `distorted_metrics` | no (por defecto `false`) | `true` = margen, ROE y spread marcados como no representativos (MSTR: tesorería en bitcoin) |
+| `tax_exempt` | no (por defecto `false`) | `true` = tipo impositivo 0 en el coste neto de la deuda (ESEA: régimen de tonelaje) |
 
 ## Uso
 

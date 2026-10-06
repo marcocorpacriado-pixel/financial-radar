@@ -155,7 +155,8 @@ class RequestTest(ApiTestCase):
     def test_prompt_rules(self):
         prompt = analyst.SYSTEM_PROMPT
         for rule in ("year-over-year", "sequential", "interanual", "secuencial", "<financial_metrics>",
-                     "interest coverage", "debt maturities", "quotes must always come from the MD&A"):
+                     "interest coverage", "debt maturities", "cost of equity k", "DSO, DIO or DPO", "distorted",
+                     "quotes must always come from the MD&A"):
             self.assertIn(rule, prompt)
 
     def test_without_previous(self):

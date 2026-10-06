@@ -41,6 +41,13 @@ class Metrics:
     roic: float | None                  # el negativo se conserva (destruye valor)
     roe: float | None
     current_ratio: float | None
+    # Coste de capital y ciclo de caja (añadido 2026-10-06)
+    beta: float | None                  # profile.beta de cada empresa, tal cual
+    asset_turnover: float | None        # ratios-ttm.assetTurnoverTTM
+    dso: float | None                   # días; key-metrics-ttm
+    dio: float | None
+    dpo: float | None
+    cash_conversion_cycle: float | None # DSO + DIO - DPO (DIO None/0 → DSO - DPO; DSO 0 → None)
 
 @dataclass(frozen=True)
 class Report:
@@ -55,6 +62,12 @@ class Report:
     peer_median_operating_margin: float | None
     pe_vs_peers: float | None           # prima/descuento relativo frente a la mediana de pares
     margin_vs_peers: float | None       # diferencia en puntos: 0.30 - 0.25 = +0.05
+    risk_free_rate: float               # bono a 10 años (fracción); 0.04 si FMP falla
+    cost_of_equity: float | None        # k = rf + beta × ERP; None sin beta válida
+    roe_spread: float | None            # ROE - k: > 0 crea valor, < 0 lo destruye
+    cost_of_debt: float | None          # rd = intereses TTM / deuda total
+    tax_rate: float | None              # t efectiva del escudo fiscal
+    cost_of_debt_after_tax: float | None  # rd × (1 - t)
 ```
 
 Unidades: márgenes, crecimientos, yields, primas y divergencias como **fracción** (0.25 = 25 %). `radar` formatea.
@@ -70,6 +83,20 @@ Unidades: márgenes, crecimientos, yields, primas y divergencias como **fracció
 | `current_ratio` | `key-metrics-ttm.currentRatioTTM` | `positive()` |
 
 "Negativo → None" se aplica sólo donde el negativo no tiene sentido económico (múltiplos, apalancamiento sobre EBITDA negativo, D/E con patrimonio negativo). En cobertura y rentabilidades, el negativo es información.
+
+### Coste de capital y ciclo de caja (añadido 2026-10-06)
+
+| Campo | Fuente | Regla |
+|---|---|---|
+| `risk_free_rate` | `treasury-rates?from=hoy-10d`, `year10` de la fecha más reciente (en %, se divide entre 100) | Caché en disco `cache/fmp-treasury.json` 24 h (1 llamada al día como mucho). Cualquier fallo (red, HTTP, sin key, sin dato) → `RF_FALLBACK = 0.04`, aviso por stderr y **no** se cachea. Nota: `/stable/treasury` devuelve 404. |
+| `cost_of_equity` | CAPM con `ERP = 0.05` fija y `profile.beta` | `cost_of_equity(rf, beta)`: beta `None` o ≤ 0 → `None` (revisado 2026-10-06: no se asume una beta neutra; k y spread salen `n/d`). |
+| `roe_spread` | `roe - cost_of_equity` | `None` si falta ROE o k. |
+| `cost_of_debt` | intereses TTM (suma de los 4 últimos trimestres de `interestExpense`; FY si hubo fallback) / `balance-sheet-statement.totalDebt` (último trimestre; FY si 402/403) | `cost_of_debt(interest, debt)`: `None` sin deuda o con intereses ausentes/negativos. `totalDebt` incluye arrendamientos, coherente con unos intereses que incluyen los del leasing financiero (MSFT: 128,8 B$ frente a 40,3 B$ de deuda financiera). Misma divisa que la cuenta de resultados (BABA en CNY). |
+| `tax_rate` | `incomeTaxExpense` / `incomeBeforeTax`, sumas TTM de las mismas filas del `income-statement` (FY si hubo fallback) | `effective_tax_rate(tax, ebt, exempt)`: `exempt` (`analyze(..., tax_exempt=True)`, desde `portfolio.toml`; ESEA, régimen de tonelaje) o EBT ≤ 0 (MSTR: sin beneficio no hay escudo) → 0. Si no, acotada a [0, `MAX_TAX_RATE = 0.35`] para neutralizar créditos extraordinarios. Falta un dato → `None`. Sustituye al 21 % plano (2026-10-06). |
+| `cost_of_debt_after_tax` | `rd × (1 - tax_rate)` | `None` si falta rd o t. |
+| `dso`, `dio`, `dpo`, `cash_conversion_cycle` | `key-metrics-ttm.daysOf{Sales,Inventory,Payables}OutstandingTTM`, `cashConversionCycleTTM` (están en key-metrics-ttm, no en ratios-ttm) | `cash_cycle(dso, dio, dpo, fmp_ccc)`: `DSO + (DIO or 0) - DPO`; sin DSO o DPO, el CCC de FMP. **DSO = 0 → `None`**: es un dato no reportado (BABA, −233 d falsos), no cobro al contado. |
+
+Límite conocido: rf y ERP son de EE. UU. también para BABA y ESEA.
 
 ## Reglas de cálculo (funciones puras, todas con test)
 
@@ -102,7 +129,7 @@ Base `https://financialmodelingprep.com/stable/`. `/v4/stock_peers` y el resto d
 | `historical-price-eod/light?symbol=&from=` | precio y volumen (últimos ~60 días naturales) | `date`, `price`, `volume` (más reciente primero: se ordena por `date`) |
 | `stock-peers?symbol=` | lista de pares (sólo si no vienen en config) | `symbol` |
 
-**Presupuesto de llamadas** (plan gratuito: 250/día): 6 por ticker (+1 si hay fallback a FY) + 1 (`stock-peers`) + 1 por peer (`ratios-ttm`), con `MAX_PEERS = 5` → ≤ 12 por ticker sin caché, ~20 tickers por ejecución. Suficiente para un resumen cada 7–15 días.
+**Presupuesto de llamadas** (plan gratuito: 250/día): 8 por ticker (+`profile` y `balance-sheet-statement` desde 2026-10-06; +1 por estado si hay fallback a FY) + 1 (`stock-peers`) + 1 por peer (`ratios-ttm`), con `MAX_PEERS = 5` → ≤ 14 por ticker sin caché, más 1 `treasury-rates` al día como mucho; ~17 tickers por ejecución. Suficiente para un resumen cada 7–15 días.
 
 **Caché**: todas las GET pasan por una función memoizada (`functools.cache`) durante la ejecución. Peers compartidos entre tickers de la cartera, o un peer que también está en cartera, se piden una sola vez. Un contador de llamadas (`calls_made`) permite a `radar` registrar el consumo.
 
